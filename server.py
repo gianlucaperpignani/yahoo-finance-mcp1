@@ -1,13 +1,13 @@
+import os
 import time
 import json
-from mcp.server.fastmcp import FastMCP
+from flask import Flask, jsonify, request
 import yfinance as yf
 
-# Inizializziamo il server impostando esplicitamente il trasporto HTTP richiesto per il Cloud
-mcp = FastMCP("YahooFinanceServer", transport="streamable-http")
+app = Flask(__name__)
 
 CACHE = {}
-CACHE_TTL = 3600  # Cache di 1 ora per azzerare l'errore 429
+CACHE_TTL = 3600  # 1 ora di cache
 
 def get_data(ticker_symbol):
     now = time.time()
@@ -18,7 +18,7 @@ def get_data(ticker_symbol):
     hist = ticker.history(period="5y", interval="1d")
     
     if hist.empty:
-        raise ValueError("Nessun dato trovato per questo Ticker")
+        raise ValueError("Nessun dato trovato")
         
     hist_dict = hist.reset_index().to_dict(orient="records")
     for row in hist_dict:
@@ -31,22 +31,24 @@ def get_data(ticker_symbol):
         
     payload = {
         "ticker": ticker_symbol,
-        "history": hist_dict[-100:], # Mandiamo gli ultimi 100 record per non eccedere i token
-        "actions": actions_dict[-20:]
+        "history": hist_dict[-100:],  # Ultimi 100 giorni per risparmiare token
+        "actions": actions_dict[-20:] # Ultimi dividendi e split
     }
     
     CACHE[ticker_symbol] = {'timestamp': now, 'data': payload}
     return payload
 
-@mcp.tool()
-def get_market_data(ticker: str) -> str:
-    """Estrae storico rettificato, dividendi e split per WDEF.L, SU.PA e altri ticker di Yahoo Finance."""
+@app.route('/market-data', methods=['GET'])
+def market_data_api():
+    ticker = request.args.get('ticker')
+    if not ticker:
+        return jsonify({"errore": "Parametro 'ticker' mancante"}), 400
     try:
-        data = get_data(ticker)
-        return json.dumps(data, indent=2)
+        data = get_data(ticker.upper())
+        return jsonify(data)
     except Exception as e:
-        return f"Errore nel caricamento dei dati: {str(e)}"
+        return jsonify({"errore": str(e)}), 500
 
-# Lasciamo che FastMCP gestisca internamente l'avvio della porta di Render
 if __name__ == "__main__":
-    mcp.run()
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
