@@ -1,17 +1,13 @@
 import time
 import json
 from mcp.server.fastmcp import FastMCP
-from mcp.server.sse import SseServerTransport
-from starlette.applications import Starlette
-from starlette.routing import Route
 import yfinance as yf
 
-# Inizializza FastMCP
-mcp = FastMCP("YahooFinanceServer")
+# Inizializziamo il server impostando esplicitamente il trasporto HTTP richiesto per il Cloud
+mcp = FastMCP("YahooFinanceServer", transport="streamable-http")
 
-# Cache per evitare l'errore 429
 CACHE = {}
-CACHE_TTL = 3600  # 1 ora
+CACHE_TTL = 3600  # Cache di 1 ora per azzerare l'errore 429
 
 def get_data(ticker_symbol):
     now = time.time()
@@ -22,7 +18,7 @@ def get_data(ticker_symbol):
     hist = ticker.history(period="5y", interval="1d")
     
     if hist.empty:
-        raise ValueError("Nessun dato trovato")
+        raise ValueError("Nessun dato trovato per questo Ticker")
         
     hist_dict = hist.reset_index().to_dict(orient="records")
     for row in hist_dict:
@@ -35,7 +31,7 @@ def get_data(ticker_symbol):
         
     payload = {
         "ticker": ticker_symbol,
-        "history": hist_dict[-100:],
+        "history": hist_dict[-100:], # Mandiamo gli ultimi 100 record per non eccedere i token
         "actions": actions_dict[-20:]
     }
     
@@ -44,26 +40,13 @@ def get_data(ticker_symbol):
 
 @mcp.tool()
 def get_market_data(ticker: str) -> str:
-    """Estrae storico rettificato, dividendi e split per WDEF.L, SU.PA e altri ticker."""
+    """Estrae storico rettificato, dividendi e split per WDEF.L, SU.PA e altri ticker di Yahoo Finance."""
     try:
         data = get_data(ticker)
         return json.dumps(data, indent=2)
     except Exception as e:
-        return f"Errore: {str(e)}"
+        return f"Errore nel caricamento dei dati: {str(e)}"
 
-# Creazione dell'applicazione web per gestire il trasporto SSE richiesto da Render e ChatGPT
-sse = SseServerTransport("/messages")
-
-async def handle_sse(request):
-    async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
-        await mcp.run(read_stream, write_stream, mcp.create_initialization_options())
-
-async def handle_messages(request):
-    await sse.handle_post_message(request.scope, request.receive, request._send)
-
-app = Starlette(
-    routes=[
-        Route("/sse", endpoint=handle_sse, methods=["GET"]),
-        Route("/messages", endpoint=handle_messages, methods=["POST"]),
-    ]
-)
+# Lasciamo che FastMCP gestisca internamente l'avvio della porta di Render
+if __name__ == "__main__":
+    mcp.run()
