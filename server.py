@@ -1,11 +1,15 @@
 import time
-from mcp.server.fastmcp import FastMCP
-import yfinance as yf
 import json
+from mcp.server.fastmcp import FastMCP
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
+import yfinance as yf
 
+# Inizializza FastMCP
 mcp = FastMCP("YahooFinanceServer")
 
-# Cache per evitare l'errore 429 (Rate limit)
+# Cache per evitare l'errore 429
 CACHE = {}
 CACHE_TTL = 3600  # 1 ora
 
@@ -31,8 +35,8 @@ def get_data(ticker_symbol):
         
     payload = {
         "ticker": ticker_symbol,
-        "history": hist_dict[-100:], # Ultimi 100 giorni per risparmiare token
-        "actions": actions_dict[-20:] # Ultimi dividendi/split
+        "history": hist_dict[-100:],
+        "actions": actions_dict[-20:]
     }
     
     CACHE[ticker_symbol] = {'timestamp': now, 'data': payload}
@@ -47,5 +51,19 @@ def get_market_data(ticker: str) -> str:
     except Exception as e:
         return f"Errore: {str(e)}"
 
-if __name__ == "__main__":
-    mcp.run(transport="sse")
+# Creazione dell'applicazione web per gestire il trasporto SSE richiesto da Render e ChatGPT
+sse = SseServerTransport("/messages")
+
+async def handle_sse(request):
+    async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+        await mcp.run(read_stream, write_stream, mcp.create_initialization_options())
+
+async def handle_messages(request):
+    await sse.handle_post_message(request.scope, request.receive, request._send)
+
+app = Starlette(
+    routes=[
+        Route("/sse", endpoint=handle_sse, methods=["GET"]),
+        Route("/messages", endpoint=handle_messages, methods=["POST"]),
+    ]
+)
