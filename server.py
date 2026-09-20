@@ -65,8 +65,10 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
     final_history = formatted_history[-300:]
     
     formatted_actions = []
-    if not actions := ticker.actions.empty:
-        actions_dict = ticker.actions.reset_index().to_dict(orient="records")
+    # RIGA CORRETTA: Corretto l'errore di sintassi sull'operatore di assegnazione
+    actions = ticker.actions
+    if actions is not None and not actions.empty:
+        actions_dict = actions.reset_index().to_dict(orient="records")
         for row in actions_dict:
             formatted_actions.append({
                 "date": row['Date'].strftime('%Y-%m-%d'),
@@ -170,7 +172,6 @@ def mcp_rpc_server():
                     "error": {"code": -32000, "message": str(e)}
                 }), 500
                 
-    # Metodo sconosciuto o non supportato
     return jsonify({
         "jsonrpc": "2.0",
         "id": rpc_id,
