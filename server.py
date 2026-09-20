@@ -27,8 +27,10 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
     if hist.empty:
         raise ValueError(f"Nessun dato trovato per il ticker {ticker_symbol}")
         
-    # Correzione Valuta Nativa
+    # Estrazione Info con gestione sicura dei dizionari vuoti
     info = ticker.info or {}
+    
+    # 1. Correzione Valuta Nativa
     currency = info.get('currency')
     if not currency:
         if ticker_symbol.endswith('.PA'):
@@ -38,7 +40,15 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
         else:
             currency = info.get('financialCurrency', 'USD')
             
-    exchange_timezone = info.get('exchangeTimezoneName', 'Europe/Paris' if ticker_symbol.endswith('.PA') else 'America/New_York')
+    # 2. 🆕 CORREZIONE DEFINTIVA TIMEZONE: Controllo nativo e fallback geografici espliciti
+    exchange_timezone = info.get('exchangeTimezoneName')
+    if not exchange_timezone:
+        if ticker_symbol.endswith('.PA'):
+            exchange_timezone = 'Europe/Paris'
+        elif ticker_symbol.endswith('.L'):
+            exchange_timezone = 'Europe/London'
+        else:
+            exchange_timezone = 'America/New_York'
     
     total_sessions_available = len(hist)
     hist_dict = hist.reset_index().to_dict(orient="records")
@@ -100,18 +110,15 @@ def market_data_api():
     except Exception as e:
         return jsonify({"errore": str(e)}), 500
 
-# 🤖 SERVER MCP JSON-RPC AGGIORNATO CON NOTIFICHE E PARAMETRI COMPLETI
 @app.route('/mcp', methods=['POST'])
 def mcp_rpc_server():
     body = request.get_json(silent=True) or {}
     method = body.get("method")
     rpc_id = body.get("id", 1)
     
-    # 🆕 CORREZIONE: Gestione notifica di inizializzazione completata (Standard MCP)
     if method == "notifications/initialized":
         return "", 204
     
-    # 1. Inizializzazione MCP
     if method == "initialize":
         return jsonify({
             "jsonrpc": "2.0",
@@ -119,11 +126,10 @@ def mcp_rpc_server():
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "YahooFinanceAdvancedMCP", "version": "1.3.0"}
+                "serverInfo": {"name": "YahooFinanceAdvancedMCP", "version": "1.3.1"}
             }
         })
         
-    # 2. Elenco Strumenti MCP (tools/list) con parametri start ed end aggiunti
     elif method == "tools/list":
         return jsonify({
             "jsonrpc": "2.0",
@@ -147,7 +153,6 @@ def mcp_rpc_server():
             }
         })
         
-    # 3. Esecuzione Strumento MCP (tools/call)
     elif method == "tools/call":
         params = body.get("params", {})
         tool_name = params.get("name")
