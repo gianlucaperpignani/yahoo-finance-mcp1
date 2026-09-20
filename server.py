@@ -27,7 +27,7 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
     if hist.empty:
         raise ValueError(f"Nessun dato trovato per il ticker {ticker_symbol}")
         
-    # Correzione Valuta Nativa (Verifica info o fallback intelligenti per mercati noti)
+    # Correzione Valuta Nativa
     info = ticker.info or {}
     currency = info.get('currency')
     if not currency:
@@ -55,17 +55,15 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
             "high": float(row['High']),
             "low": float(row['Low']),
             "close": float(row['Close']),
-            "adj_close": float(row['Close']), # yfinance .history() estrae dati già rettificati
+            "adj_close": float(row['Close']),
             "volume": int(row['Volume'])
         })
         
-    # Applichiamo il taglio a 300 record per i token ma segnaliamo lo stato reale
     sessions_returned = 300 if total_sessions_available > 300 else total_sessions_available
     truncated = total_sessions_available > 300
     final_history = formatted_history[-300:]
     
     formatted_actions = []
-    # RIGA CORRETTA: Corretto l'errore di sintassi sull'operatore di assegnazione
     actions = ticker.actions
     if actions is not None and not actions.empty:
         actions_dict = actions.reset_index().to_dict(orient="records")
@@ -92,7 +90,6 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
     CACHE[cache_key] = {'timestamp': now, 'data': payload}
     return payload
 
-# Endpoint REST di fallback e diagnostica
 @app.route('/market-data', methods=['GET'])
 def market_data_api():
     ticker = request.args.get('ticker')
@@ -103,14 +100,18 @@ def market_data_api():
     except Exception as e:
         return jsonify({"errore": str(e)}), 500
 
-# 🤖 IMPLEMENTAZIONE REALE PROTOCOLLO MCP VIA HTTP JSON-RPC
+# 🤖 SERVER MCP JSON-RPC AGGIORNATO CON NOTIFICHE E PARAMETRI COMPLETI
 @app.route('/mcp', methods=['POST'])
 def mcp_rpc_server():
     body = request.get_json(silent=True) or {}
     method = body.get("method")
     rpc_id = body.get("id", 1)
     
-    # 1. Fase di Inizializzazione MCP richiesta da ChatGPT
+    # 🆕 CORREZIONE: Gestione notifica di inizializzazione completata (Standard MCP)
+    if method == "notifications/initialized":
+        return "", 204
+    
+    # 1. Inizializzazione MCP
     if method == "initialize":
         return jsonify({
             "jsonrpc": "2.0",
@@ -118,11 +119,11 @@ def mcp_rpc_server():
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "YahooFinanceAdvancedMCP", "version": "1.2.0"}
+                "serverInfo": {"name": "YahooFinanceAdvancedMCP", "version": "1.3.0"}
             }
         })
         
-    # 2. Elenco Strumenti MCP (tools/list)
+    # 2. Elenco Strumenti MCP (tools/list) con parametri start ed end aggiunti
     elif method == "tools/list":
         return jsonify({
             "jsonrpc": "2.0",
@@ -130,13 +131,15 @@ def mcp_rpc_server():
             "result": {
                 "tools": [{
                     "name": "get_market_data",
-                    "description": "Ottiene storico rettificato (min 260 sedute), valuta nativa corretta, timezone, split e dividendi per titoli USA ed Europei (es. SU.PA, WDEF.L, AAPL).",
+                    "description": "Ottiene storico rettificato, valuta nativa corretta, timezone, split e dividendi per titoli USA ed Europei (es. SU.PA, WDEF.L, AAPL). Supporta intervalli temporali personalizzati.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "ticker": {"type": "string", "description": "Il simbolo del ticker"},
-                            "period": {"type": "string", "default": "5y"},
-                            "interval": {"type": "string", "default": "1d"}
+                            "period": {"type": "string", "default": "5y", "description": "1d, 5d, 1mo, 1y, 5y, max"},
+                            "interval": {"type": "string", "default": "1d", "description": "1d, 1wk, 1mo"},
+                            "start": {"type": "string", "description": "Data inizio (Formato YYYY-MM-DD), opzionale"},
+                            "end": {"type": "string", "description": "Data fine (Formato YYYY-MM-DD), opzionale"}
                         },
                         "required": ["ticker"]
                     }
@@ -156,7 +159,9 @@ def mcp_rpc_server():
                 data = get_advanced_data(
                     ticker_symbol=ticker.upper(),
                     period=arguments.get("period", "5y"),
-                    interval=arguments.get("interval", "1d")
+                    interval=arguments.get("interval", "1d"),
+                    start=arguments.get("start"),
+                    end=arguments.get("end")
                 )
                 return jsonify({
                     "jsonrpc": "2.0",
