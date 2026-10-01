@@ -14,13 +14,72 @@ app = Flask(__name__)
 CACHE = {}
 CACHE_TTL = 1800  # 30 minuti
 CACHE_LOCK = Lock()
-VERSION = "1.4.0"
+VERSION = "1.4.1"
+MAX_RETURNED_BARS = 300
+MIN_RISK_PRICES = 251
+OHLC_REL_TOLERANCE = 1e-6
 
 def finite(value):
     value = float(value)
     if not math.isfinite(value):
         raise ValueError("Dato numerico non finito")
     return value
+
+
+def _format_bar(row):
+    """Validate one Yahoo bar without letting one bad row poison a series."""
+    date_str = row['Date'].strftime('%Y-%m-%d')
+    timestamp = int(row['Date'].timestamp())
+    try:
+        bar = {
+            "date": date_str,
+            "timestamp": timestamp,
+            "open": finite(row['Open']),
+            "high": finite(row['High']),
+            "low": finite(row['Low']),
+            "close": finite(row['Close']),
+            "adj_close": finite(row['Close'])
+        }
+    except (TypeError, ValueError, OverflowError) as exc:
+        return None, {"date": date_str, "reason": f"prezzo non valido: {exc}"}, None
+
+    if min(bar['open'], bar['high'], bar['low'], bar['close']) <= 0:
+        return None, {"date": date_str, "reason": "prezzo non positivo"}, None
+
+    upper = max(bar['open'], bar['close'])
+    lower = min(bar['open'], bar['close'])
+    tolerance = max(1e-8, upper * OHLC_REL_TOLERANCE)
+    normalized = []
+    if bar['high'] < upper:
+        if upper - bar['high'] <= tolerance:
+            bar['high'] = upper
+            normalized.append("high")
+        else:
+            return None, {"date": date_str, "reason": "high inferiore a open/close"}, None
+    if bar['low'] > lower:
+        if bar['low'] - lower <= tolerance:
+            bar['low'] = lower
+            normalized.append("low")
+        else:
+            return None, {"date": date_str, "reason": "low superiore a open/close"}, None
+    if bar['low'] > bar['high']:
+        return None, {"date": date_str, "reason": "low superiore a high"}, None
+
+    try:
+        volume = finite(row['Volume'])
+        if volume < 0 or not volume.is_integer():
+            raise ValueError("volume negativo o non intero")
+        bar['volume'] = int(volume)
+    except (TypeError, ValueError, OverflowError):
+        # Volume is optional for scanner/risk. Keep strict JSON and expose the issue.
+        bar['volume'] = None
+        normalized.append("volume_null")
+
+    adjustment = None
+    if normalized:
+        adjustment = {"date": date_str, "fields": normalized,
+                      "reason": "normalizzazione entro tolleranza o volume non disponibile"}
+    return bar, None, adjustment
 
 def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end=None):
     if not isinstance(ticker_symbol, str) or not re.fullmatch(r"[A-Za-z0-9^][A-Za-z0-9.^=\-]{0,39}", ticker_symbol.strip()):
@@ -76,44 +135,44 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
         raise ValueError("Corporate actions mancanti")
     
     total_sessions_available = len(hist)
+    latest_source_date = hist.index[-1].strftime('%Y-%m-%d')
     hist_dict = hist.reset_index().to_dict(orient="records")
     formatted_history = []
+    dropped_bars = []
+    adjusted_bars = []
     
     for row in hist_dict:
-        date_str = row['Date'].strftime('%Y-%m-%d')
-        timestamp = int(row['Date'].timestamp())
-            
-        formatted_history.append({
-            "date": date_str,
-            "timestamp": timestamp,
-            "open": finite(row['Open']),
-            "high": finite(row['High']),
-            "low": finite(row['Low']),
-            "close": finite(row['Close']),
-            "adj_close": finite(row['Close']),
-            "volume": finite(row['Volume'])
-        })
-        bar = formatted_history[-1]
-        if (bar['low'] <= 0 or bar['low'] > min(bar['open'], bar['close'])
-                or bar['high'] < max(bar['open'], bar['close'])
-                or bar['volume'] < 0 or not bar['volume'].is_integer()):
-            raise ValueError("OHLCV incoerenti")
-        bar['volume'] = int(bar['volume'])
+        bar, issue, adjustment = _format_bar(row)
+        if issue:
+            dropped_bars.append(issue)
+            continue
+        formatted_history.append(bar)
+        if adjustment:
+            adjusted_bars.append(adjustment)
     if len({bar['date'] for bar in formatted_history}) != len(formatted_history):
         raise ValueError("Date duplicate")
-        
-    sessions_returned = 300 if total_sessions_available > 300 else total_sessions_available
-    truncated = total_sessions_available > 300
-    final_history = formatted_history[-300:]
+    if dropped_bars and dropped_bars[-1]['date'] == latest_source_date:
+        raise ValueError(f"Ultima barra non valida ({latest_source_date}): {dropped_bars[-1]['reason']}")
+    if len(formatted_history) < 1:
+        raise ValueError("Serie insufficiente dopo la pulizia")
+
+    valid_sessions_available = len(formatted_history)
+    truncated = valid_sessions_available > MAX_RETURNED_BARS
+    final_history = formatted_history[-MAX_RETURNED_BARS:]
+    sessions_returned = len(final_history)
     
     formatted_actions = []
     # Reuse actions from the same history request, not an extra max-history fetch.
-    actions = hist.iloc[-300:][['Dividends', 'Stock Splits']]
+    returned_dates = {bar['date'] for bar in final_history}
+    actions = hist[['Dividends', 'Stock Splits']]
     if actions is not None and not actions.empty:
         actions_dict = actions.reset_index().to_dict(orient="records")
         for row in actions_dict:
+            action_date = row['Date'].strftime('%Y-%m-%d')
+            if action_date not in returned_dates:
+                continue
             formatted_actions.append({
-                "date": row['Date'].strftime('%Y-%m-%d'),
+                "date": action_date,
                 "dividends": finite(row['Dividends']),
                 "stock_splits": finite(row['Stock Splits'])
             })
@@ -144,8 +203,19 @@ def get_advanced_data(ticker_symbol, period="5y", interval="1d", start=None, end
         "generated_at_utc": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         "adjusted": True,
         "total_sessions_available": total_sessions_available,
+        "valid_sessions_available": valid_sessions_available,
         "sessions_returned": sessions_returned,
         "truncated": truncated,
+        "data_quality": {
+            "strict_json": True,
+            "dropped_bars_count": len(dropped_bars),
+            "dropped_bars": dropped_bars,
+            "adjusted_bars_count": len(adjusted_bars),
+            "adjusted_bars": adjusted_bars,
+            "latest_source_bar_valid": True,
+            "minimum_risk_prices": MIN_RISK_PRICES,
+            "risk_sample_sufficient": sessions_returned >= MIN_RISK_PRICES
+        },
         "history": final_history,
         "actions": formatted_actions
     }
