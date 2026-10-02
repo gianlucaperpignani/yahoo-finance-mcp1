@@ -1350,6 +1350,469 @@ def _parse_ishares_api(body, config, ticker):
                "data_quality": {"complete_holdings": True, "official_source": True, "warnings": []}}
     return _validate_holdings(payload)
 
-
 def _html_text(fragment):
-    clean = re.sub(r"<script\b[^>]*>.*?</script>|<style\b[^>]*>.*?</style>", "
+    clean = re.sub(r"<script\b[^>]*>.*?</script>|<style\b[^>]*>.*?</style>", " ", fragment,
+                   flags=re.I | re.S)
+    clean = re.sub(r"<[^>]+>", " ", clean)
+    return re.sub(r"\s+", " ", html.unescape(clean)).strip()
+
+
+def _table_rows(document):
+    tables = []
+    for table in re.findall(r"<table\b[^>]*>(.*?)</table>", document, flags=re.I | re.S):
+        rows = []
+        for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", table, flags=re.I | re.S):
+            cells = [_html_text(cell) for cell in
+                     re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row, flags=re.I | re.S)]
+            if cells:
+                rows.append(cells)
+        if rows:
+            tables.append(rows)
+    return tables
+
+
+def _weighted_rows(rows):
+    items = []
+    for row in rows:
+        if len(row) < 2:
+            continue
+        weight = _number(row[-1])
+        name = row[0].strip()
+        if weight is None or not name or weight < 0 or weight > 100:
+            continue
+        lowered = name.lower()
+        if any(word in lowered for word in ("name", "nom", "poids", "weight", "country", "pays")):
+            continue
+        items.append({"name": name, "weight_pct": weight})
+    return items
+
+
+def _select_weighted_table(candidates, required_names):
+    required = {n.lower() for n in required_names}
+    return next((rows for rows in candidates if any(i["name"].lower() in required for i in rows)), [])
+
+
+def _parse_wisdomtree_holdings(body, config, ticker):
+    document = body.decode("utf-8", errors="replace")
+    visible = _html_text(document)
+    m = re.search(r"(?:As of|Au|Stand)\s+([0-9A-Za-zÀ-ÿ,./ -]{6,24})", visible, flags=re.I)
+    as_of = _date_from_text(m.group(1) if m else visible)
+    if not as_of:
+        raise ValueError("Data holdings WisdomTree mancante")
+    candidates = [r for r in (_weighted_rows(t) for t in _table_rows(document)) if r]
+    if not candidates:
+        raise ValueError("Tabelle holdings WisdomTree non trovate (pagina caricata via JavaScript?)")
+    remaining_labels = {"remaining portfolio", "portefeuille restant", "restliches portfolio"}
+    holdings_rows = _select_weighted_table(candidates, remaining_labels | {
+        "bae systems", "thales", "rheinmetall", "leonardo"})
+    sector_rows = _select_weighted_table(candidates, {"industrials", "industrie"})
+    country_rows = _select_weighted_table(candidates, {"france", "germany", "united kingdom", "italy", "sweden"})
+    if holdings_rows in (sector_rows, country_rows):
+        holdings_rows = []
+    if not 95 <= sum(x["weight_pct"] for x in sector_rows) <= 105:
+        sector_rows = []
+    if not 95 <= sum(x["weight_pct"] for x in country_rows) <= 105:
+        country_rows = []
+    remaining = next((x["weight_pct"] for x in holdings_rows if x["name"].lower() in remaining_labels), 0.0)
+    holdings = [{"ticker": None, "name": x["name"], "isin": None, "sector": None, "asset_class": "Equity",
+                 "country": None, "market_currency": None, "weight_pct": x["weight_pct"]}
+                for x in holdings_rows if x["name"].lower() not in remaining_labels]
+    if len(holdings) < 10 or not sector_rows or not country_rows:
+        raise ValueError("Look-through WisdomTree insufficiente")
+    total = sum(x["weight_pct"] for x in holdings) + remaining
+    warnings = [f"Dettaglio emittenti parziale: portafoglio restante {remaining:.2f}%"] if remaining else []
+    payload = {"server_version": VERSION, "source": "Official_ETF_Issuer", "provider": config["provider"],
+               "ticker": ticker, "canonical_ticker": ticker, "fund_name": config["fund_name"],
+               "isin": config["isin"], "as_of": as_of.isoformat(), "generated_at_utc": _utc_stamp(),
+               "source_url": config["source_url"], "source_hash": hashlib.sha256(body).hexdigest(),
+               "holdings_detail": "top_holdings_plus_remainder" if remaining else "complete",
+               "proposal_usable": True, "holdings_count": len(holdings), "weight_total_pct": total,
+               "issuer_coverage_pct": sum(x["weight_pct"] for x in holdings),
+               "remaining_portfolio_pct": remaining, "holdings": holdings,
+               "sector_exposure": sector_rows, "country_exposure": country_rows,
+               "data_quality": {"complete_holdings": not bool(remaining), "official_source": True,
+                                "warnings": warnings}}
+    return _validate_holdings(payload)
+
+
+def get_etf_lookthrough(ticker, top=25):
+    requested = _validate_ticker(ticker)
+    canonical = ETF_ALIASES.get(requested, requested)
+    config = ETF_PRODUCTS.get(canonical)
+    if not config:
+        raise ValueError("ETF non supportato: disponibili " + ", ".join(ETF_PRODUCTS))
+    key = f"etf:{canonical}"
+    entry = _cache_get(key)
+    if entry and time.time() - entry["ts"] < ETF_CACHE_TTL:
+        payload = dict(entry["data"], cache_hit=True)
+    else:
+        url = _ishares_url(config["product_id"]) if config["provider"] == "iShares" else config["download_url"]
+        body, _ctype, _final = _http_get(url)
+        if config["provider"] == "iShares":
+            payload = _parse_ishares_api(body, config, canonical)
+        else:
+            payload = _parse_wisdomtree_holdings(body, config, canonical)
+        _cache_put(key, {"ts": time.time(), "data": payload})
+        payload = dict(payload, cache_hit=False)
+    try:
+        top = max(5, min(int(top), 200))
+    except (TypeError, ValueError):
+        top = 25
+    hold = sorted(payload["holdings"], key=lambda h: -h["weight_pct"])[:top]
+    out = {k: v for k, v in payload.items() if k != "holdings"}
+    out.update(ticker=requested, canonical_ticker=canonical,
+               weight_total_pct=_rnd(payload["weight_total_pct"], 3),
+               issuer_coverage_pct=_rnd(payload["issuer_coverage_pct"], 3),
+               holdings_returned=len(hold),
+               top_holdings=[{"ticker": h.get("ticker"), "name": h.get("name"), "sector": h.get("sector"),
+                              "country": h.get("country"), "weight_pct": _rnd(h["weight_pct"], 3)}
+                             for h in hold])
+    return out
+
+
+# -----------------------------------------------------------------------------
+# Preriscaldamento in background
+# -----------------------------------------------------------------------------
+_WARM_LOCK = threading.Lock()
+
+
+def _warm_needed(t):
+    entry = _cache_get(_series_key(t, DEFAULT_PERIOD, "1d", None, None))
+    if entry is None:
+        return True
+    age = time.time() - entry["ts"]
+    code = _calendar_code(t)
+    if code is None:
+        return age >= NO_CAL_TTL
+    try:
+        expected, _ = _last_completed(code)
+    except Exception:
+        return age >= NO_CAL_TTL
+    if entry["expected"] != expected:
+        return True
+    if not entry["after_close"]:
+        return _close_settled(code) and age >= MIN_REFETCH_S
+    if entry["data"]["coverage_end"] != expected:
+        return age >= LAG_REFETCH_S
+    return False
+
+
+def _warm_list():
+    with _EXTRA_LOCK:
+        extra = sorted(_EXTRA)
+    seq = PORTFOLIO_WATCH + list(BENCHMARKS.values()) + FX_PAIRS + extra + UNIVERSE_EU + UNIVERSE_US
+    return list(dict.fromkeys(seq))
+
+
+def _warmer_loop():
+    time.sleep(20)
+    while True:
+        try:
+            today = datetime.now(ROME).date().isoformat()
+            if _WS["day"] != today:
+                _WS.update(day=today, fetched_today=0)
+            for t in _warm_list():
+                if _WS["fetched_today"] >= WARMER_DAILY_MAX:
+                    break
+                left = _yahoo_cooldown_left()
+                if left > 0:
+                    time.sleep(left + 5)
+                fail = _FAILS.get(t)
+                if fail and time.time() - fail[0] < FAIL_SKIP_S:
+                    continue
+                try:
+                    if not _warm_needed(t):
+                        continue
+                    _load_series(t, user=False)
+                    _WS["fetched_today"] += 1
+                    _WS["last_ticker"] = t
+                    _count("warmer_fetched")
+                except ValueError as exc:
+                    _WS["last_error"] = f"{t}: {str(exc)[:120]}"
+                time.sleep(WARMER_PAUSE)
+            _WS["last_cycle_utc"] = _utc_stamp()
+        except Exception as exc:
+            log.exception("Errore nel preriscaldamento")
+            _WS["last_error"] = f"ciclo: {str(exc)[:120]}"
+        time.sleep(60)
+
+
+def _start_warmer():
+    with _WARM_LOCK:
+        if _WS["started"] or not WARMER_ENABLED:
+            return
+        _WS["started"] = True
+        threading.Thread(target=_warmer_loop, daemon=True, name="warmer").start()
+        log.info("Preriscaldamento avviato")
+
+
+# -----------------------------------------------------------------------------
+# Stato del server
+# -----------------------------------------------------------------------------
+def get_server_status():
+    def ready(lst):
+        n = 0
+        for t in lst:
+            try:
+                if not _warm_needed(t):
+                    n += 1
+            except Exception:
+                pass
+        return n
+
+    with CACHE_LOCK:
+        series_items = sum(1 for k in CACHE if k.startswith("s:"))
+    with _STATS_LOCK:
+        stats = dict(_STATS)
+    return {
+        "server_version": VERSION, "generated_at_utc": _utc_stamp(),
+        "exchange_calendars_installed": xcals is not None,
+        "universe_version": UNIVERSE_VERSION,
+        "universe_US": len(UNIVERSE_US), "ready_US": ready(UNIVERSE_US),
+        "universe_EU": len(UNIVERSE_EU), "ready_EU": ready(UNIVERSE_EU),
+        "portfolio_watch": PORTFOLIO_WATCH, "ready_portfolio": ready(PORTFOLIO_WATCH),
+        "cache_series": series_items,
+        "yahoo_calls_today": stats.get("yahoo_calls", 0),
+        "yahoo_429_today": stats.get("yahoo_429", 0),
+        "cache_hits_today": stats.get("cache_hits", 0),
+        "cooldown_s": int(_yahoo_cooldown_left()),
+        "recent_failures": len([1 for v in _FAILS.values() if time.time() - v[0] < FAIL_SKIP_S]),
+        "warmer": {"enabled": WARMER_ENABLED, "started": _WS["started"],
+                   "fetched_today": _WS["fetched_today"], "last_ticker": _WS["last_ticker"],
+                   "last_error": _WS["last_error"], "last_cycle_utc": _WS["last_cycle_utc"]},
+    }
+
+
+# -----------------------------------------------------------------------------
+# Endpoint HTTP
+# -----------------------------------------------------------------------------
+def _err(exc, source="Yahoo_Finance_Storico", code=503):
+    return jsonify({"status": "BLOCCATO PER DATI", "source": source,
+                    "reason": str(exc)[:300], "server_version": VERSION}), code
+
+
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({"service": "Yahoo Finance Storico", "version": VERSION,
+                    "endpoints": ["/health", "/status", "/market-data", "/indicators", "/scan",
+                                  "/risk (POST)", "/exchange-calendar", "/etf-lookthrough", "/mcp (POST)"]})
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "version": VERSION})
+
+
+@app.route("/status", methods=["GET"])
+def status_api():
+    return jsonify(get_server_status())
+
+
+@app.route("/market-data", methods=["GET"])
+def market_data_api():
+    try:
+        a = request.args
+        return jsonify(get_market_data(a.get("ticker"), a.get("period", DEFAULT_PERIOD), a.get("interval", "1d"),
+                                       a.get("start"), a.get("end"), a.get("max_bars")))
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.route("/indicators", methods=["GET"])
+def indicators_api():
+    try:
+        return jsonify(get_indicators(request.args.get("ticker")))
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.route("/scan", methods=["GET"])
+def scan_api():
+    try:
+        raw = request.args.get("tickers")
+        tickers = [t for t in raw.split(",") if t.strip()] if raw else None
+        return jsonify(scan_market(request.args.get("market", "US"), tickers,
+                                   request.args.get("max_per_setup", 4)))
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.route("/risk", methods=["POST"])
+def risk_api():
+    try:
+        b = request.get_json(silent=True) or {}
+        return jsonify(portfolio_risk(b.get("equity_usd"), b.get("cash_usd"), b.get("positions"),
+                                      b.get("copy_value_usd", 0), b.get("candidate"), b.get("eurusd")))
+    except Exception as exc:
+        return _err(exc, "server-risk", 400)
+
+
+@app.route("/exchange-calendar", methods=["GET"])
+def exchange_calendar_api():
+    try:
+        a = request.args
+        return jsonify(get_exchange_calendar(a.get("exchange"), a.get("ticker"), a.get("start"), a.get("end")))
+    except Exception as exc:
+        return _err(exc, "Official_Exchange_Calendar", 400)
+
+
+@app.route("/etf-lookthrough", methods=["GET"])
+def etf_lookthrough_api():
+    try:
+        return jsonify(get_etf_lookthrough(request.args.get("ticker"), request.args.get("top", 25)))
+    except Exception as exc:
+        return _err(exc, "Official_ETF_Issuer")
+
+
+# -----------------------------------------------------------------------------
+# MCP (JSON-RPC 2.0)
+# -----------------------------------------------------------------------------
+SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
+RO = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
+
+TOOLS = [
+    {"name": "get_market_data", "annotations": RO,
+     "description": "Storico OHLCV rettificato (solo sedute concluse) da Yahoo, con valuta, timezone, "
+                    "calendario, ultima seduta attesa (data_current), split e dividendi. Max 300 barre.",
+     "inputSchema": {"type": "object", "properties": {
+         "ticker": {"type": "string", "description": "Ticker Yahoo, es. AAPL, SAP.DE, CSPX.L, EURUSD=X"},
+         "period": {"type": "string", "default": "2y", "description": "1mo, 3mo, 6mo, 1y, 2y, 5y, ytd, max"},
+         "interval": {"type": "string", "default": "1d", "description": "1d, 1wk, 1mo"},
+         "start": {"type": "string", "description": "YYYY-MM-DD"},
+         "end": {"type": "string", "description": "YYYY-MM-DD esclusiva"},
+         "max_bars": {"type": "integer", "description": "Barre restituite, 1-300 (default 300)"}},
+         "required": ["ticker"]}},
+    {"name": "get_indicators", "annotations": RO,
+     "description": "Indicatori tecnici compatti su sedute concluse: trend, SMA 20/50/200, RSI, MACD, ATR, "
+                    "RVOL giornaliero, forza relativa 20 sedute vs benchmark, supporti/resistenze, setup.",
+     "inputSchema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}},
+    {"name": "scan_market", "annotations": RO,
+     "description": "Scanner riproducibile su universo USA o Europa (o lista personalizzata). Restituisce "
+                    "copertura, esclusi e shortlist per setup CONTINUAZIONE/CORREZIONE/INVERSIONE.",
+     "inputSchema": {"type": "object", "properties": {
+         "market": {"type": "string", "description": "US oppure EU"},
+         "tickers": {"type": "array", "items": {"type": "string"},
+                     "description": "Opzionale: lista ticker Yahoo da analizzare al posto dell'universo"},
+         "max_per_setup": {"type": "integer", "default": 4}},
+         "required": ["market"]}},
+    {"name": "get_portfolio_risk", "annotations": RO,
+     "description": "VaR/ES 95-99% 1g e 5g (simulazione storica), correlazioni 60/120, allocazione, "
+                    "riconciliazione e simulazione di un candidato. positions = sole posizioni dirette "
+                    "(ticker Yahoo, valore USD); le COPY vanno solo in copy_value_usd (aggregate).",
+     "inputSchema": {"type": "object", "properties": {
+         "equity_usd": {"type": "number"}, "cash_usd": {"type": "number"},
+         "copy_value_usd": {"type": "number"}, "eurusd": {"type": "number"},
+         "positions": {"type": "array", "items": {"type": "object", "properties": {
+             "ticker": {"type": "string"}, "value_usd": {"type": "number"},
+             "type": {"type": "string", "description": "STOCK o ETF"}},
+             "required": ["ticker", "value_usd"]}},
+         "candidate": {"type": "object", "properties": {
+             "ticker": {"type": "string"}, "amount_usd": {"type": "number"}, "type": {"type": "string"}},
+             "required": ["ticker", "amount_usd"]}},
+         "required": ["equity_usd", "cash_usd", "positions"]}},
+    {"name": "get_exchange_calendar", "annotations": RO,
+     "description": "Sedute, orari, chiusure e stato attuale di una borsa (XNYS, XETR, XMIL, XPAR, XAMS, "
+                    "XMAD, XSWX, XLON, nordiche). Indicare exchange oppure ticker.",
+     "inputSchema": {"type": "object", "properties": {
+         "exchange": {"type": "string"}, "ticker": {"type": "string"},
+         "start": {"type": "string"}, "end": {"type": "string"}}}},
+    {"name": "get_etf_lookthrough", "annotations": RO,
+     "description": "Composizione ufficiale ETF (CSPX, EIMI, WDEF): data, copertura, prime posizioni, "
+                    "esposizioni per settore e paese.",
+     "inputSchema": {"type": "object", "properties": {
+         "ticker": {"type": "string"}, "top": {"type": "integer", "default": 25}},
+         "required": ["ticker"]}},
+    {"name": "get_server_status", "annotations": RO,
+     "description": "Stato del server: titoli pronti in cache, chiamate e 429 Yahoo, pausa anti-429.",
+     "inputSchema": {"type": "object", "properties": {}}},
+]
+
+
+def _dispatch(name, a):
+    if name == "get_market_data":
+        return get_market_data(a.get("ticker"), a.get("period") or DEFAULT_PERIOD, a.get("interval") or "1d",
+                               a.get("start"), a.get("end"), a.get("max_bars"))
+    if name == "get_indicators":
+        return get_indicators(a.get("ticker"))
+    if name == "scan_market":
+        return scan_market(a.get("market", "US"), a.get("tickers"), a.get("max_per_setup", 4))
+    if name == "get_portfolio_risk":
+        return portfolio_risk(a.get("equity_usd"), a.get("cash_usd"), a.get("positions"),
+                              a.get("copy_value_usd", 0), a.get("candidate"), a.get("eurusd"))
+    if name == "get_exchange_calendar":
+        return get_exchange_calendar(a.get("exchange"), a.get("ticker"), a.get("start"), a.get("end"))
+    if name == "get_etf_lookthrough":
+        return get_etf_lookthrough(a.get("ticker"), a.get("top", 25))
+    if name == "get_server_status":
+        return get_server_status()
+    raise KeyError(name)
+
+
+def _rpc(rpc_id, result=None, error=None):
+    body = {"jsonrpc": "2.0", "id": rpc_id}
+    if error is not None:
+        body["error"] = error
+    else:
+        body["result"] = result
+    return jsonify(body)
+
+
+@app.route("/mcp", methods=["GET"])
+def mcp_get():
+    return jsonify({"error": "Usare POST JSON-RPC"}), 405
+
+
+@app.route("/mcp", methods=["POST"])
+def mcp_rpc_server():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or body.get("jsonrpc") != "2.0" or not isinstance(body.get("method"), str):
+        return _rpc(None, error={"code": -32600, "message": "Invalid Request"}), 400
+    method = body["method"]
+    if "id" not in body:
+        return "", 202
+    rpc_id = body.get("id")
+    params = body.get("params") or {}
+    if not isinstance(params, dict):
+        return _rpc(rpc_id, error={"code": -32602, "message": "Invalid params"})
+
+    if method == "initialize":
+        req = params.get("protocolVersion")
+        ver = req if req in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[0]
+        return _rpc(rpc_id, {"protocolVersion": ver, "capabilities": {"tools": {"listChanged": False}},
+                             "serverInfo": {"name": "YahooFinanceAdvancedMCP", "version": VERSION}})
+    if method == "ping":
+        return _rpc(rpc_id, {})
+    if method == "tools/list":
+        return _rpc(rpc_id, {"tools": TOOLS})
+    if method == "resources/list":
+        return _rpc(rpc_id, {"resources": []})
+    if method == "prompts/list":
+        return _rpc(rpc_id, {"prompts": []})
+    if method == "tools/call":
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        if not isinstance(args, dict):
+            return _rpc(rpc_id, error={"code": -32602, "message": "Invalid arguments"})
+        try:
+            data = _dispatch(name, args)
+            return _rpc(rpc_id, {"content": [{"type": "text", "text": _json_text(data)}], "isError": False})
+        except KeyError:
+            return _rpc(rpc_id, error={"code": -32602, "message": f"Tool sconosciuto: {name}"})
+        except Exception as exc:
+            source = {"get_exchange_calendar": "Official_Exchange_Calendar",
+                      "get_etf_lookthrough": "Official_ETF_Issuer",
+                      "get_portfolio_risk": "server-risk"}.get(name, "Yahoo_Finance_Storico")
+            return _rpc(rpc_id, {"isError": True, "content": [{"type": "text", "text": _json_text(
+                {"status": "BLOCCATO PER DATI", "source": source, "reason": str(exc)[:300],
+                 "server_version": VERSION})}]})
+    return _rpc(rpc_id, error={"code": -32601, "message": "Method not found"}), 404
+
+
+# -----------------------------------------------------------------------------
+# Avvio
+# -----------------------------------------------------------------------------
+_start_warmer()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
