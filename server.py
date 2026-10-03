@@ -1471,9 +1471,15 @@ def get_etf_lookthrough(ticker, top=25):
 
 
 # -----------------------------------------------------------------------------
-# Preriscaldamento in background
+# Preriscaldamento 1.6.1: piccoli lotti eseguiti tramite /warm (cron-job.org)
 # -----------------------------------------------------------------------------
+VERSION = "1.6.1"
+WARMER_ENABLED = os.environ.get("WARMER", "0") == "1"   # thread in background: spento di default
+WARM_BATCH_MAX = 12
+WARM_TIME_BUDGET = 15
 _WARM_LOCK = threading.Lock()
+_WARM_RUN_LOCK = threading.Lock()
+_WS.update(heartbeat_utc=None, stage="idle", current_ticker=None, last_batch=None, batches_today=0)
 
 
 def _warm_needed(t):
@@ -1504,37 +1510,80 @@ def _warm_list():
     return list(dict.fromkeys(seq))
 
 
+def warm_batch(max_items=WARM_BATCH_MAX, budget=WARM_TIME_BUDGET):
+    if not _WARM_RUN_LOCK.acquire(blocking=False):
+        return {"server_version": VERSION, "status": "busy",
+                "note": "Un lotto e' gia' in corso", "stage": _WS["stage"],
+                "current_ticker": _WS["current_ticker"]}
+    t0 = time.time()
+    done, failed, checked, skipped_fail = [], [], 0, 0
+    stop_reason = "completato"
+    try:
+        today = datetime.now(ROME).date().isoformat()
+        if _WS["day"] != today:
+            _WS.update(day=today, fetched_today=0, batches_today=0)
+        for t in _warm_list():
+            if len(done) + len(failed) >= max_items:
+                stop_reason = "limite lotto"
+                break
+            if time.time() - t0 > budget:
+                stop_reason = "limite tempo"
+                break
+            if _yahoo_cooldown_left() > 0:
+                stop_reason = "pausa anti-429"
+                break
+            fail = _FAILS.get(t)
+            if fail and time.time() - fail[0] < FAIL_SKIP_S:
+                skipped_fail += 1
+                continue
+            _WS.update(stage="check", current_ticker=t, heartbeat_utc=_utc_stamp())
+            try:
+                checked += 1
+                if not _warm_needed(t):
+                    continue
+                _WS["stage"] = "fetch"
+                _load_series(t, user=False)
+                done.append(t)
+                _WS["fetched_today"] += 1
+                _WS["last_ticker"] = t
+                _count("warmer_fetched")
+            except Exception as exc:
+                msg = str(exc)
+                failed.append(t)
+                _WS["last_error"] = f"{t}: {msg[:120]}"
+                if "429" in msg or "pausa" in msg:
+                    stop_reason = "429 Yahoo"
+                    break
+        _WS["batches_today"] += 1
+        summary = {"at_utc": _utc_stamp(), "fetched": len(done), "failed": len(failed),
+                   "stop": stop_reason, "seconds": round(time.time() - t0, 1)}
+        _WS["last_batch"] = summary
+        _WS["last_cycle_utc"] = summary["at_utc"]
+        return {"server_version": VERSION, "status": "ok", "fetched": done, "failed": failed,
+                "checked": checked, "skipped_recent_failures": skipped_fail,
+                "stop_reason": stop_reason, "seconds": summary["seconds"],
+                "fetched_today": _WS["fetched_today"], "cooldown_s": int(_yahoo_cooldown_left())}
+    finally:
+        _WS.update(stage="idle", current_ticker=None, heartbeat_utc=_utc_stamp())
+        _WARM_RUN_LOCK.release()
+
+
+@app.route("/warm", methods=["GET"])
+def warm_api():
+    try:
+        return jsonify(warm_batch())
+    except Exception as exc:
+        return _err(exc)
+
+
 def _warmer_loop():
     time.sleep(20)
     while True:
         try:
-            today = datetime.now(ROME).date().isoformat()
-            if _WS["day"] != today:
-                _WS.update(day=today, fetched_today=0)
-            for t in _warm_list():
-                if _WS["fetched_today"] >= WARMER_DAILY_MAX:
-                    break
-                left = _yahoo_cooldown_left()
-                if left > 0:
-                    time.sleep(left + 5)
-                fail = _FAILS.get(t)
-                if fail and time.time() - fail[0] < FAIL_SKIP_S:
-                    continue
-                try:
-                    if not _warm_needed(t):
-                        continue
-                    _load_series(t, user=False)
-                    _WS["fetched_today"] += 1
-                    _WS["last_ticker"] = t
-                    _count("warmer_fetched")
-                except ValueError as exc:
-                    _WS["last_error"] = f"{t}: {str(exc)[:120]}"
-                time.sleep(WARMER_PAUSE)
-            _WS["last_cycle_utc"] = _utc_stamp()
+            warm_batch()
         except Exception as exc:
-            log.exception("Errore nel preriscaldamento")
             _WS["last_error"] = f"ciclo: {str(exc)[:120]}"
-        time.sleep(60)
+        time.sleep(30)
 
 
 def _start_warmer():
@@ -1543,7 +1592,7 @@ def _start_warmer():
             return
         _WS["started"] = True
         threading.Thread(target=_warmer_loop, daemon=True, name="warmer").start()
-        log.info("Preriscaldamento avviato")
+        log.info("Preriscaldamento in background avviato")
 
 
 # -----------------------------------------------------------------------------
@@ -1564,6 +1613,8 @@ def get_server_status():
         series_items = sum(1 for k in CACHE if k.startswith("s:"))
     with _STATS_LOCK:
         stats = dict(_STATS)
+    full = _warm_list()
+    ready_all = ready(full)
     return {
         "server_version": VERSION, "generated_at_utc": _utc_stamp(),
         "exchange_calendars_installed": xcals is not None,
@@ -1571,15 +1622,18 @@ def get_server_status():
         "universe_US": len(UNIVERSE_US), "ready_US": ready(UNIVERSE_US),
         "universe_EU": len(UNIVERSE_EU), "ready_EU": ready(UNIVERSE_EU),
         "portfolio_watch": PORTFOLIO_WATCH, "ready_portfolio": ready(PORTFOLIO_WATCH),
+        "warm_list_total": len(full), "warm_pending": len(full) - ready_all,
         "cache_series": series_items,
         "yahoo_calls_today": stats.get("yahoo_calls", 0),
         "yahoo_429_today": stats.get("yahoo_429", 0),
         "cache_hits_today": stats.get("cache_hits", 0),
         "cooldown_s": int(_yahoo_cooldown_left()),
         "recent_failures": len([1 for v in _FAILS.values() if time.time() - v[0] < FAIL_SKIP_S]),
-        "warmer": {"enabled": WARMER_ENABLED, "started": _WS["started"],
-                   "fetched_today": _WS["fetched_today"], "last_ticker": _WS["last_ticker"],
-                   "last_error": _WS["last_error"], "last_cycle_utc": _WS["last_cycle_utc"]},
+        "warmer": {"mode": "thread" if WARMER_ENABLED else "cron /warm",
+                   "batches_today": _WS["batches_today"], "fetched_today": _WS["fetched_today"],
+                   "stage": _WS["stage"], "current_ticker": _WS["current_ticker"],
+                   "heartbeat_utc": _WS["heartbeat_utc"], "last_ticker": _WS["last_ticker"],
+                   "last_error": _WS["last_error"], "last_batch": _WS["last_batch"]},
     }
 
 
