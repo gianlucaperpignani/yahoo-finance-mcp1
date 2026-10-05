@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-A1_VERSION = "a1-volume-0.6-mandate-rvol20"
+A1_VERSION = "a1-volume-0.7-rvol20-post-auth-fix"
 
 # Regioni Yahoo utili alla copertura USA + principali mercati europei.
 # Un errore su una regione non blocca le altre: viene esposto in source_errors.
@@ -464,7 +464,7 @@ def discover_a1_volume(
         "market": market,
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": "Yahoo predefined market movers + Yahoo_Finance_Storico",
-        "method": "most_actives -> dedup Level A/exclusions -> pre-rank -> true 5m cumulative RVOL-at-time -> daily/session-progress fallback",
+        "method": "most_actives -> dedup Level A/exclusions -> pre-rank -> true 5m cumulative RVOL-at-time (20 sedute) -> RVOL_GIORNALIERO fallback",
         "limitations": [
             "RVOL-at-time richiede 20 sedute intraday comparabili; altrimenti usa RVOL_GIORNALIERO dichiarato",
             "la discovery live A1 considera solo quote in stato REGULAR: PRE/POST/CLOSED non vengono interpretati come RVOL-at-time",
