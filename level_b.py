@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-A1_VERSION = "a1-volume-0.5-session-safe-regional"
+A1_VERSION = "a1-volume-0.6-mandate-rvol20"
 
 # Regioni Yahoo utili alla copertura USA + principali mercati europei.
 # Un errore su una regione non blocca le altre: viene esposto in source_errors.
@@ -64,8 +64,8 @@ A1_MIN_RAW_RATIO_10D = 0.12          # volume corrente / media giornaliera 10d
 A1_MIN_PACE_RVOL = 1.50              # soglia comune RVOL-at-time / fallback proxy
 A1_STRONG_PACE_RVOL = 2.00
 A1_VERY_STRONG_PACE_RVOL = 3.00
-A1_INTRADAY_LOOKBACK = 10
-A1_INTRADAY_MIN_SESSIONS = 5
+A1_INTRADAY_LOOKBACK = 20
+A1_INTRADAY_MIN_SESSIONS = 20
 
 # Titoli esplicitamente gia' esclusi dalla costruzione Level A per dipendenza
 # prevalente dalla tesi crypto. Applicazione tecnica dell'esclusione del Mandato.
@@ -391,11 +391,11 @@ def discover_a1_volume(
                     intraday_meta = dict(intraday)
                     intraday_ok += 1
 
-            # Fallback: mantiene operativa A1 se Yahoo intraday non restituisce
-            # abbastanza sedute/barre comparabili. Non viene etichettato come vero RVOL.
+            # Fallback conforme al Mandato: se manca il confronto same-time su 20
+            # sedute, usa soltanto volume corrente / media giornaliera 20 sedute
+            # ed etichetta esplicitamente il risultato come RVOL GIORNALIERO.
             payload = None
             stats = None
-            progress = None
             raw20 = None
             if rvol is None:
                 intraday_fallback += 1
@@ -404,9 +404,9 @@ def discover_a1_volume(
                 if not stats:
                     history_errors.append({"ticker": t, "stage": "daily_fallback", "error": "storico volumi insufficiente"})
                     continue
-                progress = _session_progress_safe(session_progress_fn, t)
-                rvol, rvol_method = _pace_ratio(rec["current_volume"], stats["avg_volume_20d"], progress)
                 raw20 = rec["current_volume"] / stats["avg_volume_20d"] if stats["avg_volume_20d"] > 0 else None
+                rvol = raw20
+                rvol_method = "RVOL_GIORNALIERO"
 
             if rvol is None or rvol < A1_MIN_PACE_RVOL:
                 continue
@@ -446,7 +446,7 @@ def discover_a1_volume(
                     "avg_volume_20d": round(stats["avg_volume_20d"], 0) if stats else None,
                     "median_volume_20d": round(stats["median_volume_20d"], 0) if stats else None,
                     "raw_current_vs_avg20": round(raw20, 2) if raw20 is not None else None,
-                    "session_progress": round(progress, 3) if progress is not None else None,
+                    "session_progress": None,
                     "history_as_of": payload.get("coverage_end") if payload else None,
                     "history_data_current": payload.get("data_current") if payload else None,
                 })
@@ -466,7 +466,7 @@ def discover_a1_volume(
         "source": "Yahoo predefined market movers + Yahoo_Finance_Storico",
         "method": "most_actives -> dedup Level A/exclusions -> pre-rank -> true 5m cumulative RVOL-at-time -> daily/session-progress fallback",
         "limitations": [
-            "il vero RVOL-at-time richiede almeno 5 sedute intraday comparabili; in caso contrario usa fallback dichiarato",
+            "RVOL-at-time richiede 20 sedute intraday comparabili; altrimenti usa RVOL_GIORNALIERO dichiarato",
             "la discovery live A1 considera solo quote in stato REGULAR: PRE/POST/CLOSED non vengono interpretati come RVOL-at-time",
             "A1 e' discovery tecnica: negoziabilita' eToro X1 e tesi completa vengono verificate dopo",
         ],
