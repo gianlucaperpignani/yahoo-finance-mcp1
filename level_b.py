@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-A1_VERSION = "a1-volume-0.7-rvol20-post-auth-fix"
+A1_VERSION = "a1-volume-0.8-supported-regions"
 
 # Regioni Yahoo utili alla copertura USA + principali mercati europei.
 # Un errore su una regione non blocca le altre: viene esposto in source_errors.
@@ -35,6 +35,7 @@ A1_REGIONS = {
 }
 
 A1_SCREENERS = ("most_actives",)
+A1_EU_PREDEFINED_SUPPORTED = ("GB", "DE", "FR", "IT", "ES")
 
 # Yahoo usa screener nazionali distinti per i market movers europei.
 # Il solo parametro region sullo screener US most_actives non basta.
@@ -274,11 +275,14 @@ def discover_a1_volume(
     predefined_fallback_calls = 0
     for region in A1_REGIONS[market]:
         screener = A1_REGION_SCREENERS.get(region, "most_actives")
-        attempts: List[Tuple[str, Optional[Dict[str, Any]]]] = []
-        if market == "EU" and yahoo_post is not None:
-            attempts.append(("CUSTOM_REGION", _custom_region_screener_body(
-                region, A1_MIN_PRICE, A1_DISCOVERY_COUNT_PER_REGION)))
-        attempts.append((screener, None))
+        if market == "EU" and region not in A1_EU_PREDEFINED_SUPPORTED:
+            source_errors.append({
+                "region": region,
+                "screener": screener,
+                "error": "UNSUPPORTED_BY_YAHOO_PREDEFINED",
+            })
+            continue
+        attempts: List[Tuple[str, Optional[Dict[str, Any]]]] = [(screener, None)]
 
         region_ok = False
         region_errors: List[str] = []
@@ -468,6 +472,7 @@ def discover_a1_volume(
         "limitations": [
             "RVOL-at-time richiede 20 sedute intraday comparabili; altrimenti usa RVOL_GIORNALIERO dichiarato",
             "la discovery live A1 considera solo quote in stato REGULAR: PRE/POST/CLOSED non vengono interpretati come RVOL-at-time",
+            "la discovery predefined Yahoo EU e' disponibile per GB/DE/FR/IT/ES; NL/BE/CH/SE/DK/NO/FI restano dichiarati come non supportati, mentre il Level A continua a coprire l'universo EU verificato",
             "A1 e' discovery tecnica: negoziabilita' eToro X1 e tesi completa vengono verificate dopo",
         ],
         "thresholds": {
@@ -502,7 +507,7 @@ def discover_a1_volume(
 # -----------------------------------------------------------------------------
 # A2 - Price & Momentum Radar
 # -----------------------------------------------------------------------------
-A2_VERSION = "a2-price-momentum-0.3-us-regression-fix"
+A2_VERSION = "a2-price-momentum-0.4-supported-regions"
 A2_MAX_HISTORY_CHECKS = 30
 A2_MAX_RESULTS = 12
 A2_MIN_BARS = 80
@@ -705,11 +710,14 @@ def discover_a2_momentum(
             attempts: List[Tuple[str, Optional[Dict[str, Any]]]] = [(x, None) for x in A2_US_SCREENERS]
         else:
             screener = A1_REGION_SCREENERS.get(region, "most_actives")
-            attempts = []
-            if yahoo_post is not None:
-                attempts.append(("CUSTOM_REGION", _custom_region_screener_body(
-                    region, A2_MIN_PRICE, A1_DISCOVERY_COUNT_PER_REGION)))
-            attempts.append((screener, None))
+            if region not in A1_EU_PREDEFINED_SUPPORTED:
+                source_errors.append({
+                    "region": region,
+                    "screener": screener,
+                    "error": "UNSUPPORTED_BY_YAHOO_PREDEFINED",
+                })
+                continue
+            attempts = [(screener, None)]
 
         region_ok = False
         region_errors: List[str] = []
