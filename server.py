@@ -900,9 +900,16 @@ def _yahoo_post(path, params, payload, retries):
             wait = _YS["last_call"] + YAHOO_MIN_INTERVAL - time.time()
             if wait > 0:
                 time.sleep(wait)
-            # Il custom screener POST di Yahoo rifiuta talvolta crumb validi per
-            # altri endpoint; usa solo i parametri espliciti e i cookie della sessione.
+            # Il custom screener POST usa la stessa sessione Yahoo del GET.
+            # In alcune regioni Yahoo risponde 401 se il crumb non accompagna il POST.
+            if not _YS["crumb"]:
+                try:
+                    _refresh_crumb()
+                except Exception:
+                    pass
             query = dict(params or {})
+            if _YS["crumb"]:
+                query["crumb"] = _YS["crumb"]
             url = f"https://{YAHOO_HOSTS[attempt % 2]}{path}?{urlencode(query)}"
             data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             req = Request(url, data=data, method="POST", headers={
