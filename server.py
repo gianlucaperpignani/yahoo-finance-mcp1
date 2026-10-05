@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.26 - SOLA LETTURA
+#  Versione 1.7.27 - SOLA LETTURA
 #
 #  Strumenti MCP:
 #   get_market_data        storico OHLCV rettificato (solo sedute concluse)
@@ -48,7 +48,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.26"
+VERSION = "1.7.27"
 RISK_ENGINE_VERSION = "server-risk 1.0.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -2528,6 +2528,10 @@ def mcp_get():
 
 @app.route("/mcp", methods=["POST"])
 def mcp_rpc_server():
+    # Gunicorn/Render may import the module before forking workers. In that case a
+    # thread started at import time can be lost in the worker. Ensure the warmer
+    # is started lazily inside the serving process as soon as MCP traffic arrives.
+    _start_warmer()
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or body.get("jsonrpc") != "2.0" or not isinstance(body.get("method"), str):
         return _rpc(None, error={"code": -32600, "message": "Invalid Request"}), 400
