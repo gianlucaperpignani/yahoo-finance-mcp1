@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.19 - SOLA LETTURA
+#  Versione 1.7.20 - SOLA LETTURA
 #
 #  Strumenti MCP:
 #   get_market_data        storico OHLCV rettificato (solo sedute concluse)
@@ -48,7 +48,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.19"
+VERSION = "1.7.20"
 RISK_ENGINE_VERSION = "server-risk 1.0.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -1990,7 +1990,7 @@ def get_etf_lookthrough(ticker, top=25):
 # -----------------------------------------------------------------------------
 # Preriscaldamento 1.6.1: piccoli lotti eseguiti tramite /warm (cron-job.org)
 # -----------------------------------------------------------------------------
-VERSION = "1.7.19"
+VERSION = "1.7.20"
 WARMER_ENABLED = os.environ.get("WARMER", "0") == "1"   # thread in background: spento di default
 WARM_BATCH_MAX = 12
 WARM_TIME_BUDGET = 15
