@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.20 - SOLA LETTURA
+#  Versione 1.7.22 - SOLA LETTURA
 #
 #  Strumenti MCP:
 #   get_market_data        storico OHLCV rettificato (solo sedute concluse)
@@ -48,7 +48,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.20"
+VERSION = "1.7.22"
 RISK_ENGINE_VERSION = "server-risk 1.0.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -376,7 +376,7 @@ def _intraday_cache_put(key, data):
         INTRADAY_RVOL_CACHE[key] = {"ts": now, "data": dict(data)}
 
 
-def _load_intraday_rvol_at_time(ticker, market_time_epoch=None, lookback_sessions=10):
+def _load_intraday_rvol_at_time(ticker, market_time_epoch=None, lookback_sessions=20):
     """Vero RVOL-at-time cumulativo su barre Yahoo 5m.
 
     Confronta il volume cumulato della seduta target fino all'ultima barra disponibile
@@ -385,9 +385,9 @@ def _load_intraday_rvol_at_time(ticker, market_time_epoch=None, lookback_session
     """
     ticker = _validate_ticker(ticker)
     try:
-        lookback_sessions = max(5, min(int(lookback_sessions), 20))
+        lookback_sessions = max(20, min(int(lookback_sessions), 40))
     except (TypeError, ValueError):
-        lookback_sessions = 10
+        lookback_sessions = 20
     cache_key = f"{ticker}:{lookback_sessions}"
     cached = _intraday_cache_get(cache_key)
     if cached:
@@ -396,7 +396,7 @@ def _load_intraday_rvol_at_time(ticker, market_time_epoch=None, lookback_session
     yahoo_ticker = YAHOO_SYMBOL_MAP.get(ticker, ticker)
     params = {
         "interval": "5m",
-        "range": "1mo",
+        "range": "2mo",
         "includePrePost": "false",
         "events": "",
     }
@@ -434,8 +434,8 @@ def _load_intraday_rvol_at_time(ticker, market_time_epoch=None, lookback_session
             sessions.setdefault(d, []).append((int(stamp), ts_local, v))
         except Exception:
             continue
-    if len(sessions) < 6:
-        raise ValueError("Storico intraday insufficiente per RVOL-at-time")
+    if len(sessions) < 21:
+        raise ValueError("Storico intraday insufficiente per RVOL-at-time: servono target + 20 sedute precedenti")
     for d in sessions:
         sessions[d].sort(key=lambda x: x[0])
 
@@ -474,8 +474,8 @@ def _load_intraday_rvol_at_time(ticker, market_time_epoch=None, lookback_session
             used_dates.append(d)
         if len(comparison) >= lookback_sessions:
             break
-    if len(comparison) < 5:
-        raise ValueError(f"Solo {len(comparison)} sedute intraday comparabili")
+    if len(comparison) < 20:
+        raise ValueError(f"Solo {len(comparison)} sedute intraday comparabili; il Mandato ne richiede 20")
 
     expected = sum(comparison) / len(comparison)
     ordered = sorted(comparison)
@@ -1515,7 +1515,7 @@ def _close_series_usd(payload):
     return df.iloc[:, 0] * df.iloc[:, 1], fx_t
 
 
-def _var_es(R, w, equity):
+def _var_es(R, w, equity, eurusd=None):
     out = {}
     r1 = R.values @ w
     r5 = ((1 + R).rolling(5).apply(np.prod, raw=True) - 1).dropna().values @ w
@@ -1528,10 +1528,15 @@ def _var_es(R, w, equity):
             tail = losses[losses >= var]
             es = float(tail.mean()) if len(tail) else var
             tag = int(q * 100)
+            var_usd = var * equity
+            es_usd = es * equity
             out[f"var{tag}_{label}_pct"] = _pct(var)
-            out[f"var{tag}_{label}_usd"] = _rnd(var * equity, 2)
+            out[f"var{tag}_{label}_usd"] = _rnd(var_usd, 2)
             out[f"es{tag}_{label}_pct"] = _pct(es)
-            out[f"es{tag}_{label}_usd"] = _rnd(es * equity, 2)
+            out[f"es{tag}_{label}_usd"] = _rnd(es_usd, 2)
+            if eurusd is not None and eurusd > 0:
+                out[f"var{tag}_{label}_eur"] = _rnd(var_usd / eurusd, 2)
+                out[f"es{tag}_{label}_eur"] = _rnd(es_usd / eurusd, 2)
     out["n_1d"] = int(len(r1))
     out["n_5d"] = int(len(r5))
     return out
@@ -1576,18 +1581,20 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
     _register_extra(list(agg) + ([cand["ticker"]] if cand else []))
     input_hash = hashlib.sha256(_json_text({"e": equity, "c": cash, "copy": copyv,
                                             "p": sorted((t, a["value"]) for t, a in agg.items()),
-                                            "cand": cand}).encode()).hexdigest()
+                                            "cand": cand, "eurusd": eurusd}).encode()).hexdigest()
 
     issues, alerts, critical, notes = [], [], [], []
     fx_eur = None
     try:
-        fx_eur = finite(eurusd) if eurusd else _load_series("EURUSD=X")["history"][-1]["close"]
+        fx_eur = finite(eurusd) if eurusd is not None else None
+        if fx_eur is None or fx_eur <= 0:
+            raise ValueError("EURUSD corrente mancante o non valido")
     except (ValueError, TypeError, KeyError):
-        fx_eur = 1.17
-        notes.append("EURUSD non disponibile: tolleranza calcolata con 1,17")
+        fx_eur = None
+        issues.append("EURUSD corrente verificato mancante: conversione rischio in EUR non disponibile")
     total = sum(a["value"] for a in agg.values()) + cash + copyv
     diff = equity - total
-    tol = max(fx_eur * 1.0, 0.001 * equity)
+    tol = max((fx_eur or 0.0) * 1.0, 0.001 * equity)
     recon_ok = abs(diff) <= tol
     if not recon_ok:
         issues.append(f"Riconciliazione fallita: scarto {diff:.2f} USD oltre tolleranza {tol:.2f} USD")
@@ -1630,7 +1637,7 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
             alerts.append(f"Campione provvisorio: {n} rendimenti (200-249)")
         if n >= 30:
             w = np.array([agg[t]["value"] / equity for t in port_t])
-            result_var = _var_es(R, w, equity)
+            result_var = _var_es(R, w, equity, fx_eur)
             v1, v5 = result_var.get("var99_1d_pct"), result_var.get("var99_5d_pct")
             if v1 is not None and v5 is not None:
                 if v1 > 4.0 or v5 > 10.0:
@@ -1665,7 +1672,7 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
             new_val = {t: agg[t]["value"] for t in port_t}
             new_val[ct] = new_val.get(ct, 0.0) + cand["amount"]
             wc = np.array([new_val[t] / equity for t in cols])
-            after = _var_es(Rc, wc, equity) if len(Rc) >= 30 else None
+            after = _var_es(Rc, wc, equity, fx_eur) if len(Rc) >= 30 else None
             corr_c = []
             sub = Rc.tail(120)
             if len(sub) >= 60:
@@ -1729,7 +1736,8 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
         "allocation": {"cash_pct": _pct(cash_pct), "invested_pct": _pct(1 - cash_pct),
                        "copy_pct": _pct(copyv / equity), "band_cash": "15-30%"},
         "coverage": {"analytic_pct": _pct(analytic), "copy_excluded_pct": _pct(copyv / equity),
-                     "missing": missing, "stale": stale, "fx_used": fx_used},
+                     "missing": missing, "stale": stale, "fx_used": fx_used,
+                     "eurusd_current": _rnd(fx_eur, 6) if fx_eur is not None else None},
         "sample": sample, "var_es": result_var,
         "correlation_120": corr120, "correlation_60": corr60,
         "weights": weights, "candidate": cand_out, "notes": notes,
@@ -1990,7 +1998,7 @@ def get_etf_lookthrough(ticker, top=25):
 # -----------------------------------------------------------------------------
 # Preriscaldamento 1.6.1: piccoli lotti eseguiti tramite /warm (cron-job.org)
 # -----------------------------------------------------------------------------
-VERSION = "1.7.20"
+VERSION = "1.7.22"
 WARMER_ENABLED = os.environ.get("WARMER", "0") == "1"   # thread in background: spento di default
 WARM_BATCH_MAX = 12
 WARM_TIME_BUDGET = 15
@@ -2442,7 +2450,7 @@ TOOLS = [
          "candidate": {"type": "object", "properties": {
              "ticker": {"type": "string"}, "amount_usd": {"type": "number"}, "type": {"type": "string"}},
              "required": ["ticker", "amount_usd"]}},
-         "required": ["equity_usd", "cash_usd", "positions"]}},
+         "required": ["equity_usd", "cash_usd", "positions", "eurusd"]}},
     {"name": "get_exchange_calendar", "annotations": RO,
      "description": "Sedute, orari, chiusure e stato attuale di una borsa (XNYS, XETR, XMIL, XPAR, XAMS, "
                     "XMAD, XSWX, XLON, nordiche). Indicare exchange oppure ticker.",
