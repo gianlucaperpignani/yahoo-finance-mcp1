@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.22 - SOLA LETTURA
+#  Versione 1.7.23 - SOLA LETTURA
 #
 #  Strumenti MCP:
 #   get_market_data        storico OHLCV rettificato (solo sedute concluse)
@@ -48,7 +48,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.22"
+VERSION = "1.7.23"
 RISK_ENGINE_VERSION = "server-risk 1.0.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -396,7 +396,7 @@ def _load_intraday_rvol_at_time(ticker, market_time_epoch=None, lookback_session
     yahoo_ticker = YAHOO_SYMBOL_MAP.get(ticker, ticker)
     params = {
         "interval": "5m",
-        "range": "2mo",
+        "range": "1mo",
         "includePrePost": "false",
         "events": "",
     }
@@ -836,10 +836,8 @@ def _yahoo_get(path, params, retries):
                     _YS["cooldown_until"] = time.time() + YAHOO_COOLDOWN
                     raise ValueError("Yahoo HTTP 429 persistente: pausa automatica di 3 minuti") from exc
                 if exc.code in (401, 403) and attempt < retries:
-                    try:
-                        _refresh_crumb()
-                    except Exception:
-                        pass
+                    # Il POST custom non richiede crumb: ritenta sull'altro host.
+                    time.sleep(1)
                     continue
                 if exc.code == 404:
                     raise ValueError("Ticker non trovato su Yahoo (HTTP 404)") from exc
@@ -898,9 +896,9 @@ def _yahoo_post(path, params, payload, retries):
             wait = _YS["last_call"] + YAHOO_MIN_INTERVAL - time.time()
             if wait > 0:
                 time.sleep(wait)
+            # Il custom screener POST di Yahoo rifiuta talvolta crumb validi per
+            # altri endpoint; usa solo i parametri espliciti e i cookie della sessione.
             query = dict(params or {})
-            if _YS["crumb"]:
-                query["crumb"] = _YS["crumb"]
             url = f"https://{YAHOO_HOSTS[attempt % 2]}{path}?{urlencode(query)}"
             data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             req = Request(url, data=data, method="POST", headers={
@@ -1998,7 +1996,7 @@ def get_etf_lookthrough(ticker, top=25):
 # -----------------------------------------------------------------------------
 # Preriscaldamento 1.6.1: piccoli lotti eseguiti tramite /warm (cron-job.org)
 # -----------------------------------------------------------------------------
-VERSION = "1.7.22"
+VERSION = "1.7.23"
 WARMER_ENABLED = os.environ.get("WARMER", "0") == "1"   # thread in background: spento di default
 WARM_BATCH_MAX = 12
 WARM_TIME_BUDGET = 15
