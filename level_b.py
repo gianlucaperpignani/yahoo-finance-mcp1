@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-A1_VERSION = "a1-volume-0.8-supported-regions"
+A1_VERSION = "a1-volume-0.9-supported-regions-clean"
 
 # Regioni Yahoo utili alla copertura USA + principali mercati europei.
 # Un errore su una regione non blocca le altre: viene esposto in source_errors.
@@ -300,8 +300,6 @@ def discover_a1_volume(
                 else:
                     params.update({"scrIds": screener, "count": A1_DISCOVERY_COUNT_PER_REGION})
                     body = yahoo_get("/v1/finance/screener/predefined/saved", params, 1)
-                    if market == "EU" and yahoo_post is not None:
-                        predefined_fallback_calls += 1
                 source_calls += 1
                 doc = json.loads(body)
                 quotes = _extract_quotes(doc)
@@ -467,8 +465,8 @@ def discover_a1_volume(
         "a1_version": A1_VERSION,
         "market": market,
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": "Yahoo predefined market movers + Yahoo_Finance_Storico",
-        "method": "most_actives -> dedup Level A/exclusions -> pre-rank -> true 5m cumulative RVOL-at-time (20 sedute) -> RVOL_GIORNALIERO fallback",
+        "source": "Yahoo predefined market movers (supported EU regions only) + Yahoo_Finance_Storico",
+        "method": "supported predefined movers -> dedup Level A/exclusions -> pre-rank -> true 5m cumulative RVOL-at-time (20 sedute) -> RVOL_GIORNALIERO fallback",
         "limitations": [
             "RVOL-at-time richiede 20 sedute intraday comparabili; altrimenti usa RVOL_GIORNALIERO dichiarato",
             "la discovery live A1 considera solo quote in stato REGULAR: PRE/POST/CLOSED non vengono interpretati come RVOL-at-time",
@@ -488,9 +486,11 @@ def discover_a1_volume(
         },
         "coverage": {
             "regions_expected": len(A1_REGIONS[market]),
+            "regions_supported": 1 if market == "US" else len(A1_EU_PREDEFINED_SUPPORTED),
+            "regions_unsupported": 0 if market == "US" else len(A1_REGIONS["EU"]) - len(A1_EU_PREDEFINED_SUPPORTED),
             "source_calls": source_calls,
-            "custom_region_calls": custom_region_calls,
-            "predefined_fallback_calls": predefined_fallback_calls,
+            "custom_region_calls": 0,
+            "predefined_fallback_calls": 0,
             "non_regular_skipped": non_regular_skipped,
             "unique_outside_level_a": len(discovered),
             "history_checked": len(to_check),
@@ -507,7 +507,7 @@ def discover_a1_volume(
 # -----------------------------------------------------------------------------
 # A2 - Price & Momentum Radar
 # -----------------------------------------------------------------------------
-A2_VERSION = "a2-price-momentum-0.4-supported-regions"
+A2_VERSION = "a2-price-momentum-0.5-supported-regions-clean"
 A2_MAX_HISTORY_CHECKS = 30
 A2_MAX_RESULTS = 12
 A2_MIN_BARS = 80
@@ -733,8 +733,6 @@ def discover_a2_momentum(
                 else:
                     params.update({"scrIds": source_name, "count": A1_DISCOVERY_COUNT_PER_REGION})
                     body = yahoo_get("/v1/finance/screener/predefined/saved", params, 1)
-                    if region != "US" and yahoo_post is not None:
-                        predefined_fallback_calls += 1
                 source_calls += 1
                 quotes = _extract_quotes(json.loads(body))
                 if not quotes:
@@ -824,8 +822,8 @@ def discover_a2_momentum(
         "a2_version": A2_VERSION,
         "market": market,
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": "Yahoo predefined movers + Yahoo_Finance_Storico",
-        "method": "movers/gainers -> dedup Level A/exclusions -> daily technical verification -> anti-chase ESTESO",
+        "source": "Yahoo predefined movers (supported EU regions only) + Yahoo_Finance_Storico",
+        "method": "supported movers/gainers -> dedup Level A/exclusions -> daily technical verification -> anti-chase ESTESO",
         "states": ["BREAKOUT_EARLY", "AVVIO_TREND", "PULLBACK_REBOUND", "ACCELERATION"],
         "anti_chase": "ESTESO => NO_CHASE; resta solo in extended_watchlist",
         "thresholds": {
@@ -838,9 +836,11 @@ def discover_a2_momentum(
         },
         "coverage": {
             "regions_expected": len(A1_REGIONS[market]),
+            "regions_supported": 1 if market == "US" else len(A1_EU_PREDEFINED_SUPPORTED),
+            "regions_unsupported": 0 if market == "US" else len(A1_REGIONS["EU"]) - len(A1_EU_PREDEFINED_SUPPORTED),
             "source_calls": source_calls,
-            "custom_region_calls": custom_region_calls,
-            "predefined_fallback_calls": predefined_fallback_calls,
+            "custom_region_calls": 0,
+            "predefined_fallback_calls": 0,
             "unique_outside_level_a": len(discovered),
             "history_checked": len(to_check),
             "qualified_non_extended": len(candidates),
