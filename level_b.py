@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-A1_VERSION = "a1-volume-0.4-custom-region-screener"
+A1_VERSION = "a1-volume-0.5-session-safe-regional"
 
 # Regioni Yahoo utili alla copertura USA + principali mercati europei.
 # Un errore su una regione non blocca le altre: viene esposto in source_errors.
@@ -268,6 +268,7 @@ def discover_a1_volume(
     discovered: Dict[str, Dict[str, Any]] = {}
     source_errors: List[Dict[str, str]] = []
     source_calls = 0
+    non_regular_skipped = 0
 
     custom_region_calls = 0
     predefined_fallback_calls = 0
@@ -305,8 +306,12 @@ def discover_a1_volume(
                     continue
                 region_ok = True
                 for q in quotes:
-                    rec = _quote_record(q, region, screener)
+                    rec = _quote_record(q, region, source_name)
                     if not rec:
+                        continue
+                    market_state = str(rec.get("market_state") or "").upper()
+                    if market_state and market_state != "REGULAR":
+                        non_regular_skipped += 1
                         continue
                     # Difesa geografica: Yahoo puo' ignorare region su alcuni
                     # predefined screener. Se la quote dichiara la regione,
@@ -462,7 +467,7 @@ def discover_a1_volume(
         "method": "most_actives -> dedup Level A/exclusions -> pre-rank -> true 5m cumulative RVOL-at-time -> daily/session-progress fallback",
         "limitations": [
             "il vero RVOL-at-time richiede almeno 5 sedute intraday comparabili; in caso contrario usa fallback dichiarato",
-            "la discovery dipende dalla copertura dei predefined screeners per regione",
+            "la discovery live A1 considera solo quote in stato REGULAR: PRE/POST/CLOSED non vengono interpretati come RVOL-at-time",
             "A1 e' discovery tecnica: negoziabilita' eToro X1 e tesi completa vengono verificate dopo",
         ],
         "thresholds": {
@@ -481,6 +486,7 @@ def discover_a1_volume(
             "source_calls": source_calls,
             "custom_region_calls": custom_region_calls,
             "predefined_fallback_calls": predefined_fallback_calls,
+            "non_regular_skipped": non_regular_skipped,
             "unique_outside_level_a": len(discovered),
             "history_checked": len(to_check),
             "verified_anomalies": len(verified),
@@ -496,7 +502,7 @@ def discover_a1_volume(
 # -----------------------------------------------------------------------------
 # A2 - Price & Momentum Radar
 # -----------------------------------------------------------------------------
-A2_VERSION = "a2-price-momentum-0.2-custom-region-screener"
+A2_VERSION = "a2-price-momentum-0.3-us-regression-fix"
 A2_MAX_HISTORY_CHECKS = 30
 A2_MAX_RESULTS = 12
 A2_MIN_BARS = 80
@@ -728,7 +734,7 @@ def discover_a2_momentum(
                     continue
                 region_ok = True
                 for q in quotes:
-                    rec = _quote_record(q, region, screener)
+                    rec = _quote_record(q, region, source_name)
                     if not rec:
                         continue
                     source_region = str(rec.get("source_region") or "").upper()
@@ -770,6 +776,12 @@ def discover_a2_momentum(
             source_errors.append({
                 "region": region,
                 "screener": A1_REGION_SCREENERS.get(region, "most_actives"),
+                "error": " | ".join(region_errors)[:300],
+            })
+        elif region_errors:
+            source_errors.append({
+                "region": region,
+                "screener": "PARTIAL",
                 "error": " | ".join(region_errors)[:300],
             })
 
