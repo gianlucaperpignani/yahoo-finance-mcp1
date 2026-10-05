@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-A1_VERSION = "a1-volume-0.3-regional-rvol-at-time"
+A1_VERSION = "a1-volume-0.4-custom-region-screener"
 
 # Regioni Yahoo utili alla copertura USA + principali mercati europei.
 # Un errore su una regione non blocca le altre: viene esposto in source_errors.
@@ -98,7 +98,7 @@ def _finite_number(value: Any) -> Optional[float]:
 def _norm_symbol(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         return None
-    s = value.strip().upper()
+    s = value.strip().upper().replace("\\", "")
     return s or None
 
 
@@ -215,6 +215,31 @@ def _strength_label(pace_rvol: Optional[float]) -> str:
     return "DEBOLE"
 
 
+def _custom_region_screener_body(region: str, min_price: float, count: int) -> Dict[str, Any]:
+    """Costruisce uno screener Yahoo EQUITY per una singola regione.
+
+    Yahoo non espone un predefined mover valido per tutti i paesi europei.
+    Questo POST e' il canale primario EU; il predefined resta fallback dichiarato.
+    """
+    return {
+        "offset": 0,
+        "size": max(1, min(int(count), 250)),
+        "sortField": "dayvolume",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "query": {
+            "operator": "AND",
+            "operands": [
+                {"operator": "EQ", "operands": ["region", str(region).lower()]},
+                {"operator": "GTE", "operands": ["intradayprice", float(min_price)]},
+                {"operator": "GT", "operands": ["dayvolume", 0]},
+            ],
+        },
+        "userId": "",
+        "userIdType": "guid",
+    }
+
+
 def discover_a1_volume(
     *,
     market: str,
@@ -222,6 +247,7 @@ def discover_a1_volume(
     load_series: Callable[..., Dict[str, Any]],
     level_a: Iterable[str],
     excluded_symbols: Iterable[str],
+    yahoo_post: Optional[Callable[[str, Dict[str, Any], Dict[str, Any], int], bytes]] = None,
     session_progress_fn: Optional[Callable[[str], Optional[float]]] = None,
     intraday_rvol_fn: Optional[Callable[[str, Optional[int]], Optional[Dict[str, Any]]]] = None,
     max_history_checks: int = A1_MAX_HISTORY_CHECKS,
@@ -243,25 +269,41 @@ def discover_a1_volume(
     source_errors: List[Dict[str, str]] = []
     source_calls = 0
 
+    custom_region_calls = 0
+    predefined_fallback_calls = 0
     for region in A1_REGIONS[market]:
-        screeners = (A1_REGION_SCREENERS.get(region, "most_actives"),)
-        for screener in screeners:
+        screener = A1_REGION_SCREENERS.get(region, "most_actives")
+        attempts: List[Tuple[str, Optional[Dict[str, Any]]]] = []
+        if market == "EU" and yahoo_post is not None:
+            attempts.append(("CUSTOM_REGION", _custom_region_screener_body(
+                region, A1_MIN_PRICE, A1_DISCOVERY_COUNT_PER_REGION)))
+        attempts.append((screener, None))
+
+        region_ok = False
+        region_errors: List[str] = []
+        for source_name, custom_body in attempts:
             params = {
                 "formatted": "false",
                 "lang": "en-US",
                 "region": region,
-                "scrIds": screener,
-                "count": A1_DISCOVERY_COUNT_PER_REGION,
                 "corsDomain": "finance.yahoo.com",
             }
             try:
-                body = yahoo_get("/v1/finance/screener/predefined/saved", params, 1)
+                if custom_body is not None:
+                    body = yahoo_post("/v1/finance/screener", params, custom_body, 1)
+                    custom_region_calls += 1
+                else:
+                    params.update({"scrIds": screener, "count": A1_DISCOVERY_COUNT_PER_REGION})
+                    body = yahoo_get("/v1/finance/screener/predefined/saved", params, 1)
+                    if market == "EU" and yahoo_post is not None:
+                        predefined_fallback_calls += 1
                 source_calls += 1
                 doc = json.loads(body)
                 quotes = _extract_quotes(doc)
                 if not quotes:
-                    source_errors.append({"region": region, "screener": screener, "error": "nessuna quote"})
+                    region_errors.append(f"{source_name}: nessuna quote")
                     continue
+                region_ok = True
                 for q in quotes:
                     rec = _quote_record(q, region, screener)
                     if not rec:
@@ -304,7 +346,16 @@ def discover_a1_volume(
                         discovered[t] = rec
             except Exception as exc:
                 source_calls += 1
-                source_errors.append({"region": region, "screener": screener, "error": str(exc)[:180]})
+                region_errors.append(f"{source_name}: {str(exc)[:160]}")
+                continue
+            if region_ok:
+                break
+        if not region_ok:
+            source_errors.append({
+                "region": region,
+                "screener": screener,
+                "error": " | ".join(region_errors)[:300],
+            })
 
     pre_ranked = sorted(discovered.values(), key=lambda x: (-x.get("pre_score", 0), x["ticker"]))
     to_check = pre_ranked[:max(1, min(int(max_history_checks), 60))]
@@ -428,6 +479,8 @@ def discover_a1_volume(
         "coverage": {
             "regions_expected": len(A1_REGIONS[market]),
             "source_calls": source_calls,
+            "custom_region_calls": custom_region_calls,
+            "predefined_fallback_calls": predefined_fallback_calls,
             "unique_outside_level_a": len(discovered),
             "history_checked": len(to_check),
             "verified_anomalies": len(verified),
@@ -443,7 +496,7 @@ def discover_a1_volume(
 # -----------------------------------------------------------------------------
 # A2 - Price & Momentum Radar
 # -----------------------------------------------------------------------------
-A2_VERSION = "a2-price-momentum-0.1"
+A2_VERSION = "a2-price-momentum-0.2-custom-region-screener"
 A2_MAX_HISTORY_CHECKS = 30
 A2_MAX_RESULTS = 12
 A2_MIN_BARS = 80
@@ -623,6 +676,7 @@ def discover_a2_momentum(
     load_series: Callable[..., Dict[str, Any]],
     level_a: Iterable[str],
     excluded_symbols: Iterable[str],
+    yahoo_post: Optional[Callable[[str, Dict[str, Any], Dict[str, Any], int], bytes]] = None,
     max_history_checks: int = A2_MAX_HISTORY_CHECKS,
     max_results: int = A2_MAX_RESULTS,
 ) -> Dict[str, Any]:
@@ -638,21 +692,41 @@ def discover_a2_momentum(
     source_errors: List[Dict[str, str]] = []
     source_calls = 0
 
+    custom_region_calls = 0
+    predefined_fallback_calls = 0
     for region in A1_REGIONS[market]:
-        screeners = A2_US_SCREENERS if region == "US" else (A1_REGION_SCREENERS.get(region, "most_actives"),)
-        for screener in screeners:
+        if region == "US":
+            attempts: List[Tuple[str, Optional[Dict[str, Any]]]] = [(x, None) for x in A2_US_SCREENERS]
+        else:
+            screener = A1_REGION_SCREENERS.get(region, "most_actives")
+            attempts = []
+            if yahoo_post is not None:
+                attempts.append(("CUSTOM_REGION", _custom_region_screener_body(
+                    region, A2_MIN_PRICE, A1_DISCOVERY_COUNT_PER_REGION)))
+            attempts.append((screener, None))
+
+        region_ok = False
+        region_errors: List[str] = []
+        for source_name, custom_body in attempts:
             params = {
                 "formatted": "false", "lang": "en-US", "region": region,
-                "scrIds": screener, "count": A1_DISCOVERY_COUNT_PER_REGION,
                 "corsDomain": "finance.yahoo.com",
             }
             try:
-                body = yahoo_get("/v1/finance/screener/predefined/saved", params, 1)
+                if custom_body is not None:
+                    body = yahoo_post("/v1/finance/screener", params, custom_body, 1)
+                    custom_region_calls += 1
+                else:
+                    params.update({"scrIds": source_name, "count": A1_DISCOVERY_COUNT_PER_REGION})
+                    body = yahoo_get("/v1/finance/screener/predefined/saved", params, 1)
+                    if region != "US" and yahoo_post is not None:
+                        predefined_fallback_calls += 1
                 source_calls += 1
                 quotes = _extract_quotes(json.loads(body))
                 if not quotes:
-                    source_errors.append({"region": region, "screener": screener, "error": "nessuna quote"})
+                    region_errors.append(f"{source_name}: nessuna quote")
                     continue
+                region_ok = True
                 for q in quotes:
                     rec = _quote_record(q, region, screener)
                     if not rec:
@@ -688,7 +762,16 @@ def discover_a2_momentum(
                         discovered[t] = rec
             except Exception as exc:
                 source_calls += 1
-                source_errors.append({"region": region, "screener": screener, "error": str(exc)[:180]})
+                region_errors.append(f"{source_name}: {str(exc)[:160]}")
+                continue
+            if region != "US" and region_ok:
+                break
+        if not region_ok:
+            source_errors.append({
+                "region": region,
+                "screener": A1_REGION_SCREENERS.get(region, "most_actives"),
+                "error": " | ".join(region_errors)[:300],
+            })
 
     pre_ranked = sorted(discovered.values(), key=lambda x: (-x.get("a2_pre_score", 0), x["ticker"]))
     to_check = pre_ranked[:max(1, min(int(max_history_checks), 80))]
@@ -736,6 +819,8 @@ def discover_a2_momentum(
         "coverage": {
             "regions_expected": len(A1_REGIONS[market]),
             "source_calls": source_calls,
+            "custom_region_calls": custom_region_calls,
+            "predefined_fallback_calls": predefined_fallback_calls,
             "unique_outside_level_a": len(discovered),
             "history_checked": len(to_check),
             "qualified_non_extended": len(candidates),
