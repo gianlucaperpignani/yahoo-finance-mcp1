@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.23 - SOLA LETTURA
+#  Versione 1.7.24 - SOLA LETTURA
 #
 #  Strumenti MCP:
 #   get_market_data        storico OHLCV rettificato (solo sedute concluse)
@@ -48,7 +48,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.23"
+VERSION = "1.7.24"
 RISK_ENGINE_VERSION = "server-risk 1.0.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -836,7 +836,11 @@ def _yahoo_get(path, params, retries):
                     _YS["cooldown_until"] = time.time() + YAHOO_COOLDOWN
                     raise ValueError("Yahoo HTTP 429 persistente: pausa automatica di 3 minuti") from exc
                 if exc.code in (401, 403) and attempt < retries:
-                    # Il POST custom non richiede crumb: ritenta sull'altro host.
+                    # Inizializza cookie/sessione Yahoo, ma non allega il crumb al POST.
+                    try:
+                        _refresh_crumb()
+                    except Exception:
+                        pass
                     time.sleep(1)
                     continue
                 if exc.code == 404:
@@ -1996,7 +2000,7 @@ def get_etf_lookthrough(ticker, top=25):
 # -----------------------------------------------------------------------------
 # Preriscaldamento 1.6.1: piccoli lotti eseguiti tramite /warm (cron-job.org)
 # -----------------------------------------------------------------------------
-VERSION = "1.7.23"
+VERSION = "1.7.24"
 WARMER_ENABLED = os.environ.get("WARMER", "0") == "1"   # thread in background: spento di default
 WARM_BATCH_MAX = 12
 WARM_TIME_BUDGET = 15
