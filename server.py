@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.3 - SOLA LETTURA
+#  Versione 1.7.19 - SOLA LETTURA
 #
 #  Strumenti MCP:
 #   get_market_data        storico OHLCV rettificato (solo sedute concluse)
@@ -48,7 +48,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.18"
+VERSION = "1.7.19"
 RISK_ENGINE_VERSION = "server-risk 1.0.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -525,7 +525,7 @@ def scan_level_b_volume(market="US", max_history_checks=24, max_results=12):
     market = str(market or "US").upper()
     level_a = filtered_level_a(market)
     return discover_a1_volume(
-        market=market, yahoo_get=_yahoo_get, load_series=_load_series,
+        market=market, yahoo_get=_yahoo_get, yahoo_post=_yahoo_post, load_series=_load_series,
         level_a=level_a, excluded_symbols=EXCLUDED_SYMBOLS.keys(),
         session_progress_fn=_session_progress, intraday_rvol_fn=_load_intraday_rvol_at_time,
         max_history_checks=int(max_history_checks), max_results=int(max_results),
@@ -536,7 +536,7 @@ def scan_level_b_momentum(market="US", max_history_checks=30, max_results=12):
     market = str(market or "US").upper()
     level_a = filtered_level_a(market)
     return discover_a2_momentum(
-        market=market, yahoo_get=_yahoo_get, load_series=_load_series,
+        market=market, yahoo_get=_yahoo_get, yahoo_post=_yahoo_post, load_series=_load_series,
         level_a=level_a, excluded_symbols=EXCLUDED_SYMBOLS.keys(),
         max_history_checks=int(max_history_checks), max_results=int(max_results),
     )
@@ -885,6 +885,64 @@ def _format_bar(raw):
     except (TypeError, ValueError, OverflowError):
         bar["volume"] = None
     return bar, None
+
+
+
+def _yahoo_post(path, params, payload, retries):
+    """POST Yahoo JSON serializzato, con la stessa disciplina anti-429 del GET."""
+    with _YLOCK:
+        left = _yahoo_cooldown_left()
+        if left > 0:
+            raise ValueError(f"Yahoo in pausa anti-429 per altri {int(left)} s")
+        for attempt in range(retries + 1):
+            wait = _YS["last_call"] + YAHOO_MIN_INTERVAL - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            query = dict(params or {})
+            if _YS["crumb"]:
+                query["crumb"] = _YS["crumb"]
+            url = f"https://{YAHOO_HOSTS[attempt % 2]}{path}?{urlencode(query)}"
+            data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            req = Request(url, data=data, method="POST", headers={
+                "User-Agent": YAHOO_UA,
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Content-Type": "application/json",
+                "Referer": "https://finance.yahoo.com/",
+            })
+            _YS["last_call"] = time.time()
+            _count("yahoo_calls")
+            try:
+                with _OPENER.open(req, timeout=HTTP_TIMEOUT) as response:
+                    body = response.read()
+                    if len(body) > 25_000_000:
+                        raise ValueError("Risposta Yahoo troppo grande")
+                    return body
+            except HTTPError as exc:
+                if exc.code == 429:
+                    _count("yahoo_429")
+                    if attempt < retries:
+                        time.sleep(5 + random.uniform(0, 3))
+                        continue
+                    _YS["cooldown_until"] = time.time() + YAHOO_COOLDOWN
+                    raise ValueError("Yahoo HTTP 429 persistente: pausa automatica di 3 minuti") from exc
+                if exc.code in (401, 403) and attempt < retries:
+                    try:
+                        _refresh_crumb()
+                    except Exception:
+                        pass
+                    continue
+                if exc.code == 404:
+                    raise ValueError("Screener Yahoo non trovato (HTTP 404)") from exc
+                raise ValueError(f"Yahoo HTTP {exc.code}") from exc
+            except (URLError, TimeoutError, OSError) as exc:
+                if attempt < retries:
+                    time.sleep(2)
+                    continue
+                raise ValueError(f"Yahoo non raggiungibile: {exc}") from exc
+            except Exception as exc:
+                raise ValueError(f"Errore di lettura Yahoo: {exc}") from exc
+        raise ValueError("Yahoo non disponibile")
 
 
 def _fetch_yahoo_chart(ticker, period, interval, start, end, retries):
@@ -1932,7 +1990,7 @@ def get_etf_lookthrough(ticker, top=25):
 # -----------------------------------------------------------------------------
 # Preriscaldamento 1.6.1: piccoli lotti eseguiti tramite /warm (cron-job.org)
 # -----------------------------------------------------------------------------
-VERSION = "1.7.18"
+VERSION = "1.7.19"
 WARMER_ENABLED = os.environ.get("WARMER", "0") == "1"   # thread in background: spento di default
 WARM_BATCH_MAX = 12
 WARM_TIME_BUDGET = 15
