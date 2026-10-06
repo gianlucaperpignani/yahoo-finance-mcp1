@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.27 - SOLA LETTURA
+#  Versione 1.7.28 - SOLA LETTURA
 #
 #  Strumenti MCP:
 #   get_market_data        storico OHLCV rettificato (solo sedute concluse)
@@ -18,6 +18,8 @@
 import os
 import time
 import json
+import zlib
+import gc
 import math
 import re
 import html
@@ -48,7 +50,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.27"
+VERSION = "1.7.28"
 RISK_ENGINE_VERSION = "server-risk 1.0.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -66,6 +68,8 @@ SECTOR_CACHE_TTL = 24 * 3600
 SECTOR_CACHE_MAX = 250
 MAX_HOLDINGS_AGE_DAYS = 10
 CACHE_MAX_ITEMS = 1100
+MEMORY_SOFT_LIMIT_MB = float(os.environ.get("MEMORY_SOFT_LIMIT_MB", "400"))
+MEMORY_HARD_LIMIT_MB = float(os.environ.get("MEMORY_HARD_LIMIT_MB", "460"))
 SCAN_TIME_BUDGET = 25
 SCAN_MAX_FETCH = 8
 FAIL_SKIP_S = 6 * 3600
@@ -79,7 +83,7 @@ YAHOO_COOLDOWN = 180
 # Simboli eToro che richiedono un alias diverso su Yahoo Finance.
 # L’identità operativa resta quella eToro; l’alias è usato solo nella richiesta Yahoo.
 YAHOO_SYMBOL_MAP = {"BRK.B": "BRK-B"}
-WARMER_ENABLED = os.environ.get("WARMER", "1") != "0"
+WARMER_ENABLED = os.environ.get("WARMER", "0") != "0"
 WARMER_PAUSE = 3.0
 WARMER_DAILY_MAX = 900
 
@@ -1110,14 +1114,34 @@ def _cache_get(key):
         return CACHE.get(key)
 
 
+def _cache_data(entry):
+    """Materializza un payload solo quando serve.
+
+    Le serie storiche restano compresse in RAM; ETF e altri oggetti piccoli
+    possono continuare a usare il formato data tradizionale.
+    """
+    if "blob" in entry:
+        return json.loads(zlib.decompress(entry["blob"]).decode("utf-8"))
+    return entry["data"]
+
+
 def _cache_put(key, entry):
     now = time.time()
+    stored = entry
+    if key.startswith("s:") and "data" in entry:
+        payload = entry["data"]
+        raw = json.dumps(payload, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        blob = zlib.compress(raw, 6)
+        stored = {k: v for k, v in entry.items() if k != "data"}
+        stored["coverage_end"] = payload.get("coverage_end")
+        stored["blob"] = blob
+        stored["blob_bytes"] = len(blob)
     with CACHE_LOCK:
         for k in [k for k, v in CACHE.items() if now - v["ts"] >= STALE_MAX_AGE]:
             del CACHE[k]
         while len(CACHE) >= CACHE_MAX_ITEMS:
             del CACHE[min(CACHE, key=lambda k: CACHE[k]["ts"])]
-        CACHE[key] = entry
+        CACHE[key] = stored
 
 
 def _is_fresh(entry, code, expected, interval, end):
@@ -1130,13 +1154,13 @@ def _is_fresh(entry, code, expected, interval, end):
         return False
     if not entry["after_close"]:
         return age < MIN_REFETCH_S
-    if entry["data"]["coverage_end"] != expected:
+    if entry.get("coverage_end") != expected:
         return age < LAG_REFETCH_S
     return True
 
 
 def _from_cache(entry, expected):
-    d = dict(entry["data"])
+    d = dict(_cache_data(entry))
     d["cache_hit"] = True
     d["cache_age_s"] = int(time.time() - entry["ts"])
     d["warnings"] = list(d.get("warnings", []))
@@ -1947,7 +1971,7 @@ def get_etf_lookthrough(ticker, top=25):
     key = f"etf:{canonical}"
     entry = _cache_get(key)
     if entry and time.time() - entry["ts"] < ETF_CACHE_TTL:
-        payload = dict(entry["data"], cache_hit=True)
+        payload = dict(_cache_data(entry), cache_hit=True)
     else:
         if config["provider"] == "iShares":
             url = _ishares_url(config["product_id"])
@@ -2032,7 +2056,7 @@ def _warm_needed(t):
         return True
     if not entry["after_close"]:
         return _close_settled(code) and age >= MIN_REFETCH_S
-    if entry["data"]["coverage_end"] != expected:
+    if entry.get("coverage_end") != expected:
         return age >= LAG_REFETCH_S
     return False
 
@@ -2042,6 +2066,36 @@ def _warm_list():
         extra = sorted(_EXTRA)
     seq = PORTFOLIO_WATCH + list(BENCHMARKS.values()) + FX_PAIRS + extra + filtered_level_a("EU") + filtered_level_a("US")
     return list(dict.fromkeys(seq))
+
+
+def _rss_mb():
+    """RSS corrente del processo su Linux/Render, senza dipendenze esterne."""
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return round(float(line.split()[1]) / 1024.0, 1)
+    except Exception:
+        return None
+    return None
+
+
+def _trim_aux_caches():
+    """Libera cache sacrificabili prima di avvicinarsi al limite Render."""
+    with INTRADAY_RVOL_LOCK:
+        INTRADAY_RVOL_CACHE.clear()
+    with SECTOR_CACHE_LOCK:
+        SECTOR_CACHE.clear()
+    gc.collect()
+
+
+def _memory_ok_for_warm():
+    rss = _rss_mb()
+    if rss is None or rss < MEMORY_SOFT_LIMIT_MB:
+        return True, rss
+    _trim_aux_caches()
+    rss = _rss_mb()
+    return bool(rss is None or rss < MEMORY_SOFT_LIMIT_MB), rss
 
 
 def warm_batch(max_items=WARM_BATCH_MAX, budget=WARM_TIME_BUDGET, market=None):
@@ -2104,6 +2158,14 @@ def warm_batch(max_items=WARM_BATCH_MAX, budget=WARM_TIME_BUDGET, market=None):
                 break
             if _yahoo_cooldown_left() > 0:
                 stop_reason = "pausa anti-429"
+                break
+            if _WS["fetched_today"] >= WARMER_DAILY_MAX:
+                stop_reason = "limite giornaliero warmer"
+                break
+            mem_ok, rss_now = _memory_ok_for_warm()
+            if not mem_ok:
+                stop_reason = f"memory guard {rss_now} MB"
+                _WS["last_error"] = stop_reason
                 break
             fail = _FAILS.get(t)
             if fail and time.time() - fail[0] < FAIL_SKIP_S:
@@ -2187,6 +2249,7 @@ def get_server_status():
 
     with CACHE_LOCK:
         series_items = sum(1 for k in CACHE if k.startswith("s:"))
+        compressed_bytes = sum(int(v.get("blob_bytes") or 0) for k, v in CACHE.items() if k.startswith("s:"))
     with _STATS_LOCK:
         stats = dict(_STATS)
     full = _warm_list()
@@ -2208,6 +2271,11 @@ def get_server_status():
         "portfolio_watch": PORTFOLIO_WATCH, "ready_portfolio": ready(PORTFOLIO_WATCH),
         "warm_list_total": len(full), "warm_pending": len(full) - ready_all,
         "cache_series": series_items,
+        "cache_mode": "zlib-json-on-demand",
+        "cache_compressed_mb": round(compressed_bytes / (1024 * 1024), 2),
+        "memory_rss_mb": _rss_mb(),
+        "memory_soft_limit_mb": MEMORY_SOFT_LIMIT_MB,
+        "memory_hard_limit_mb": MEMORY_HARD_LIMIT_MB,
         "yahoo_calls_today": stats.get("yahoo_calls", 0),
         "yahoo_429_today": stats.get("yahoo_429", 0),
         "cache_hits_today": stats.get("cache_hits", 0),
