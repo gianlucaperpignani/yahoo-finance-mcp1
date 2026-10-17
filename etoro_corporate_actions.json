@@ -1,0 +1,50 @@
+{
+  "CSPX.L": {
+    "verified": false,
+    "instrument_id": 3434,
+    "ticker": "CSPX.L",
+    "currency": "USD",
+    "raw_price_basis": "UNADJUSTED",
+    "raw_price_basis_reference": "Risposta eToro riportata dall’utente il 17/10/2026; da archiviare con riferimento verificabile",
+    "coverage_complete": false,
+    "coverage_start": null,
+    "coverage_end": null,
+    "reference": null,
+    "checked_at": null,
+    "events": null,
+    "status": "PENDING_COMPLETE_CORPORATE_ACTION_LEDGER",
+    "note": "Accumulating confermato dall’emittente; non prova assenza di split. Nessun evento o fattore inventato."
+  },
+  "EIMI.L": {
+    "verified": false,
+    "instrument_id": 15435,
+    "ticker": "EIMI.L",
+    "currency": "USD",
+    "raw_price_basis": "UNADJUSTED",
+    "raw_price_basis_reference": "Risposta eToro riportata dall’utente il 17/10/2026; da archiviare con riferimento verificabile",
+    "coverage_complete": false,
+    "coverage_start": null,
+    "coverage_end": null,
+    "reference": null,
+    "checked_at": null,
+    "events": null,
+    "status": "PENDING_COMPLETE_CORPORATE_ACTION_LEDGER",
+    "note": "Accumulating confermato dall’emittente; non prova assenza di split. Nessun evento o fattore inventato."
+  },
+  "WDEF.L": {
+    "verified": false,
+    "instrument_id": 3297,
+    "ticker": "WDEF.L",
+    "currency": "EUR",
+    "raw_price_basis": "UNADJUSTED",
+    "raw_price_basis_reference": "Risposta eToro riportata dall’utente il 17/10/2026; da archiviare con riferimento verificabile",
+    "coverage_complete": false,
+    "coverage_start": null,
+    "coverage_end": null,
+    "reference": null,
+    "checked_at": null,
+    "events": null,
+    "status": "PENDING_COMPLETE_CORPORATE_ACTION_LEDGER",
+    "note": "Accumulating confermato dall’emittente; non prova assenza di split. Nessun evento o fattore inventato."
+  }
+}
