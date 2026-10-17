@@ -1,0 +1,56 @@
+{
+  "MDT": {
+    "yahoo_isin": "IE00BTN1Y115",
+    "etoro_isin": null,
+    "issuer": "Medtronic plc",
+    "source": "https://investorrelations.medtronic.com/investor-FAQs",
+    "verified_on": "2026-10-17",
+    "note": "Emittente verificato; identità/ISIN eToro da verificare sullo strumento effettivo. Nessuna sostituzione automatica.",
+    "map_version": "1.0.0"
+  },
+  "ABT": {
+    "yahoo_isin": "US0028241000",
+    "etoro_isin": null,
+    "issuer": "Abbott Laboratories",
+    "source": "https://www.borsaitaliana.it/borsa/azioni/global-equity-market/listino-ufficiale.html?isin=US0028241000",
+    "verified_on": "2026-10-17",
+    "note": "Emittente verificato; identità/ISIN eToro da verificare sullo strumento effettivo. Nessuna sostituzione automatica.",
+    "map_version": "1.0.0"
+  },
+  "T": {
+    "yahoo_isin": "US00206R1023",
+    "etoro_isin": null,
+    "issuer": "AT&T Inc",
+    "source": "https://www.borsaitaliana.it/borsa/azioni/global-equity-market/listino-ufficiale.html?isin=US00206R1023",
+    "verified_on": "2026-10-17",
+    "note": "Emittente verificato; identità/ISIN eToro da verificare sullo strumento effettivo. Nessuna sostituzione automatica.",
+    "map_version": "1.0.0"
+  },
+  "NOK": {
+    "yahoo_isin": "US6549022043",
+    "etoro_isin": null,
+    "issuer": "Nokia Oyj ADR",
+    "source": "https://www.six-structured-products.com/en/underlying/nokia-oyj-adr-US6549022043",
+    "verified_on": "2026-10-17",
+    "note": "Emittente verificato; identità/ISIN eToro da verificare sullo strumento effettivo. Nessuna sostituzione automatica.",
+    "map_version": "1.0.0"
+  },
+  "S": {
+    "yahoo_isin": "US81730H1095",
+    "etoro_isin": null,
+    "issuer": "SentinelOne",
+    "source": "https://www.borsaitaliana.it/borsa/azioni/global-equity-market/listino-ufficiale.html?isin=US81730H1095",
+    "verified_on": "2026-10-17",
+    "note": "Emittente verificato; identità/ISIN eToro da verificare sullo strumento effettivo. Nessuna sostituzione automatica.",
+    "map_version": "1.0.0"
+  },
+  "CCC": {
+    "yahoo_isin": null,
+    "etoro_isin": null,
+    "issuer": null,
+    "source": null,
+    "verified_on": null,
+    "note": "Da verificare manualmente",
+    "map_version": "1.0.0"
+  }
+}
