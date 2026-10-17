@@ -1,0 +1,195 @@
+{
+  "CSPX.L": {
+    "instrument": {
+      "instrumentId": 3434,
+      "displayName": "iShares Core S&P 500 UCITS ETF",
+      "type": "ETF",
+      "symbol": "CSPX.L",
+      "exchangeId": 7,
+      "image": {
+        "uri": "https://etoro-cdn.etorostatic.com/market-avatars/3434/150x150.png"
+      }
+    },
+    "identity": {
+      "verified": true,
+      "reference": "verify_instrument_identity reale 2026-10-17T19:11:07.696961+00:00",
+      "checked_at": "2026-10-17T19:11:07.696961+00:00",
+      "instrument_id": 3434,
+      "ticker": "CSPX.L",
+      "status": "PASS",
+      "result": {
+        "status": "PASS",
+        "identity_name_or_isin_match": true,
+        "reason": "Nome compatibile",
+        "ticker_equal": true,
+        "yahoo_ticker": "CSPX.L",
+        "etoro_ticker": "CSPX.L",
+        "name_overlap_tokens": [
+          "500",
+          "CORE",
+          "ETF",
+          "ISHARES",
+          "P",
+          "S",
+          "UCITS"
+        ],
+        "yahoo_name_tokens": [
+          "500",
+          "ACC",
+          "CORE",
+          "ETF",
+          "ISHARES",
+          "P",
+          "S",
+          "UCITS",
+          "USD"
+        ],
+        "etoro_name_tokens": [
+          "500",
+          "CORE",
+          "ETF",
+          "ISHARES",
+          "P",
+          "S",
+          "UCITS"
+        ]
+      }
+    },
+    "currency": {
+      "verified": true,
+      "reference": "https://www.etoro.com/markets/cspx.l",
+      "checked_at": "2026-10-17T19:11:07.696961+00:00",
+      "instrument_id": 3434,
+      "ticker": "CSPX.L",
+      "code": "USD",
+      "note": "Valuta della quotazione verificata sulla pagina broker e confrontata con Yahoo; non dedotta da /data.symbol."
+    }
+  },
+  "EIMI.L": {
+    "instrument": {
+      "instrumentId": 15435,
+      "displayName": "iShares Core MSCI EM IMI UCITS ETF",
+      "type": "ETF",
+      "symbol": "EIMI.L",
+      "exchangeId": 7,
+      "image": {
+        "uri": "https://etoro-cdn.etorostatic.com/market-avatars/15435/15435_72CA33_F7F7F7.svg",
+        "backgroundColor": "#72CA33"
+      }
+    },
+    "identity": {
+      "verified": true,
+      "reference": "verify_instrument_identity reale 2026-10-17T19:11:07.696961+00:00",
+      "checked_at": "2026-10-17T19:11:07.696961+00:00",
+      "instrument_id": 15435,
+      "ticker": "EIMI.L",
+      "status": "PASS",
+      "result": {
+        "status": "PASS",
+        "identity_name_or_isin_match": true,
+        "reason": "Nome compatibile",
+        "ticker_equal": true,
+        "yahoo_ticker": "EIMI.L",
+        "etoro_ticker": "EIMI.L",
+        "name_overlap_tokens": [
+          "CORE",
+          "EM",
+          "ETF",
+          "IMI",
+          "ISHARES",
+          "MSCI",
+          "UCITS"
+        ],
+        "yahoo_name_tokens": [
+          "ACC",
+          "CORE",
+          "EM",
+          "ETF",
+          "IMI",
+          "ISHARES",
+          "MSCI",
+          "UCITS",
+          "USD"
+        ],
+        "etoro_name_tokens": [
+          "CORE",
+          "EM",
+          "ETF",
+          "IMI",
+          "ISHARES",
+          "MSCI",
+          "UCITS"
+        ]
+      }
+    },
+    "currency": {
+      "verified": true,
+      "reference": "https://www.etoro.com/markets/eimi.l",
+      "checked_at": "2026-10-17T19:11:07.696961+00:00",
+      "instrument_id": 15435,
+      "ticker": "EIMI.L",
+      "code": "USD",
+      "note": "Valuta della quotazione verificata sulla pagina broker e confrontata con Yahoo; non dedotta da /data.symbol."
+    }
+  },
+  "WDEF.L": {
+    "instrument": {
+      "instrumentId": 3297,
+      "displayName": "WisdomTree Europe Defence UCITS ETF",
+      "type": "ETF",
+      "symbol": "WDEF.L",
+      "exchangeId": 7,
+      "image": {
+        "uri": "https://etoro-cdn.etorostatic.com/market-avatars/3297/150x150.png"
+      }
+    },
+    "identity": {
+      "verified": true,
+      "reference": "verify_instrument_identity reale 2026-10-17T19:11:07.696961+00:00",
+      "checked_at": "2026-10-17T19:11:07.696961+00:00",
+      "instrument_id": 3297,
+      "ticker": "WDEF.L",
+      "status": "PASS",
+      "result": {
+        "status": "PASS",
+        "identity_name_or_isin_match": true,
+        "reason": "Nome compatibile",
+        "ticker_equal": true,
+        "yahoo_ticker": "WDEF.L",
+        "etoro_ticker": "WDEF.L",
+        "name_overlap_tokens": [
+          "DEFENCE",
+          "ETF",
+          "EUROPE",
+          "UCITS",
+          "WISDOMTREE"
+        ],
+        "yahoo_name_tokens": [
+          "ACC",
+          "DEFENCE",
+          "ETF",
+          "EUR",
+          "EUROPE",
+          "UCITS",
+          "WISDOMTREE"
+        ],
+        "etoro_name_tokens": [
+          "DEFENCE",
+          "ETF",
+          "EUROPE",
+          "UCITS",
+          "WISDOMTREE"
+        ]
+      }
+    },
+    "currency": {
+      "verified": true,
+      "reference": "https://www.etoro.com/markets/wdef.l",
+      "checked_at": "2026-10-17T19:11:07.696961+00:00",
+      "instrument_id": 3297,
+      "ticker": "WDEF.L",
+      "code": "EUR",
+      "note": "Valuta della quotazione verificata sulla pagina broker e confrontata con Yahoo; non dedotta da /data.symbol."
+    }
+  }
+}
