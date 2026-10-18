@@ -1,6 +1,7 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.46 - SOLA LETTURA
+#  Versione 1.7.47 - SOLA LETTURA
+#  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
 #  18/10/2026: lacune interne isolate, indicatori su coda consecutiva;
 #  rischio su coppie di sedute valide, senza barre o rendimenti sintetici.
@@ -45,6 +46,8 @@ from datetime import date, datetime, time as dt_time, timedelta, timezone
 import etoro_history
 from policy_contract import T
 from runtime_manifest import build as build_runtime_manifest
+import cycle_scanner
+from adaptive_method import validate_state
 from acquire_ecb_fx import acquire as acquire_ecb_history
 from prepare_ecb_fx import target_open
 
@@ -64,7 +67,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.46"
+VERSION = "1.7.47"
 RUNTIME_MANIFEST = build_runtime_manifest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
 DEFAULT_PERIOD = "2y"
@@ -3267,6 +3270,9 @@ def get_server_status():
     return {
         "server_version": VERSION, "generated_at_utc": _utc_stamp(),
         "runtime_manifest": RUNTIME_MANIFEST,
+        "adaptive_method_version": "1.0.0",
+        "global_chat_candidate_budget": 10,
+        "mandate_master_id": "14UkvOObo3bHHSdRcL72B_lWLAV6ajEBm",
         "efficiency": {"compact_response_version": COMPACT_RESPONSE_VERSION,
                        "response_formats": ["full", "compact"],
                        "default_format": "full", "identity_batch_max": 50,
@@ -3616,6 +3622,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "ticker": {"type": "string"}, "top": {"type": "integer", "default": 25}},
          "required": ["ticker"]}},
+    {"name": "scan_cycle_candidates", "annotations": RO,
+     "description": "Scansione asincrona Level A/B per ciclo: massimo 10 nuovi candidati complessivi USA/Europa prima della chat. Poll stesso job; nessun ticket automatico.",
+     "inputSchema": {"type": "object", "properties": {
+         "markets": {"type": "array", "items": {"type": "string", "enum": ["US", "EU"]}},
+         "learning_state": {"type": "object"},
+         "pending_keys": {"type": "array", "items": {"type": "string"}}}, "required": ["markets"]}},
     {"name": "get_server_status", "annotations": RO,
      "description": "Stato del server: titoli pronti in cache, chiamate e 429 Yahoo, pausa anti-429.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -3644,6 +3656,12 @@ for _tool in TOOLS:
 
 
 def _dispatch_full(name, a):
+    if name == "scan_cycle_candidates":
+        state = a.get("learning_state")
+        profile = validate_state(state)["active"] if state else "balanced"
+        return cycle_scanner.request(a.get("markets", []), profile, a.get("pending_keys", []),
+                                     lambda m: scan_market(m), lambda m: scan_level_b_fusion(m, 10),
+                                     profile_scope=state.get("scope") if state else None)
     if name == "get_etf_history":
         return get_etf_history(a.get("ticker"))
     if name == "get_market_data":

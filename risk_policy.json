@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
-  "version": "r6-policy-1.0.0",
+  "version": "r8-policy-1.0.0",
   "authority": "technical_translation_only",
-  "mandate_id": "1LwvkMNGxy5ah4-iIEvhtPNalQlW3APZS",
+  "mandate_id": "14UkvOObo3bHHSdRcL72B_lWLAV6ajEBm",
   "mandate_fingerprints": {
     "CONS-2026-10-17-r6": "78f5eb38aed3bd404cfc06c963926803dc04a0ec6bf8e76998aca806a20010ae",
-    "CONS-2026-10-17-r7": "9370d1486bc9aad9f8c43b2cf0fbcb55edd948f85218d6a3696d0ab2a9cbc3bd"
+    "CONS-2026-10-17-r7": "9370d1486bc9aad9f8c43b2cf0fbcb55edd948f85218d6a3696d0ab2a9cbc3bd",
+    "CONS-2026-10-18-r8": "0f361085cb8bcb070abcf6280cdb6e1399a0a371d0d4dfcc2b260bd909669629"
   },
   "scope": "Existing implemented quantitative gates; not an exhaustive translation of the Mandato. r7 is compatibility only, not activation.",
   "percent_unit": "percentage_points",
@@ -16,8 +17,8 @@
     "var99_daily_critical_pct": 4.0,
     "var99_weekly_alert_pct": 7.5,
     "var99_weekly_critical_pct": 10.0,
-    "correlation_abs_alert": 0.70,
-    "correlation_positive_critical": 0.80,
+    "correlation_abs_alert": 0.7,
+    "correlation_positive_critical": 0.8,
     "correlated_group_purchase_limit_pct": 40.0,
     "issuer_alert_pct": 20.0,
     "issuer_purchase_limit_pct": 25.0,
@@ -41,5 +42,10 @@
     "rvol_comparison": "greater_or_equal",
     "cash_range": "inclusive; allocation review, not automatic liquidation",
     "history": "actual consecutive-session returns only; no synthetic filling"
+  },
+  "mandate_ids": {
+    "CONS-2026-10-17-r6": "1LwvkMNGxy5ah4-iIEvhtPNalQlW3APZS",
+    "CONS-2026-10-17-r7": "1LwvkMNGxy5ah4-iIEvhtPNalQlW3APZS",
+    "CONS-2026-10-18-r8": "14UkvOObo3bHHSdRcL72B_lWLAV6ajEBm"
   }
 }

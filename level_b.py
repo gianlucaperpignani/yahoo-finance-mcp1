@@ -1,4 +1,4 @@
-# Release 1.7.46 — 2026-10-18: pinned technical discovery parameters; values unchanged.
+# Release 1.7.47 — 2026-10-18: original antenna features retained for adaptive comparison.
 # -*- coding: utf-8 -*-
 """
 Level B - Radar dinamico per Yahoo Finance Storico / eToro.
@@ -1767,6 +1767,7 @@ def fuse_level_b_results(*, market: str, a1: Dict[str, Any], a2: Dict[str, Any],
         watch=any(p["code"] in ("CATALYST_WATCH_ONLY","ATTENTION_WATCH_ONLY") for p in r["penalties"])
         action="NO_CHASE" if no_chase else ("WATCH_ONLY" if watch else "FUSION_CANDIDATE")
         rows.append({"ticker":t,"name":r.get("name"),"fusion_score":round(final,1),"base_score":round(base,1),
+                     "ranking_features":{"A1_VOLUME":r["signals"].get("A1"),"A2_TECHNICAL":r["signals"].get("A2"),"A3_CATALYST":r["signals"].get("A3"),"A5_SECTOR":sector_score,"A4_ATTENTION":r["signals"].get("A4")},
                      "score_components":comps,"detected_by":r["detected_by"],"signal_count":len(r["detected_by"]),
                      "sector_hint":r.get("sector_hint"),"sector_source":r.get("sector_source"),"sector_key":sk,"sector_state":sector_state,
                      "sector_score":round(sector_score,1) if sector_score is not None else None,"penalties":r["penalties"],"penalty_total":round(penalty,1),

@@ -8,7 +8,8 @@ from policy_contract import sha_file
 
 CODE = ("server.py", "level_b.py", "universe.py", "etoro_history.py", "etoro_dual_source.py",
         "etoro_corporate_actions.py", "prepare_ecb_fx.py", "acquire_ecb_fx.py",
-        "prepare_etoro_history.py", "policy_contract.py", "runtime_manifest.py")
+        "prepare_etoro_history.py", "policy_contract.py", "runtime_manifest.py",
+        "adaptive_method.py", "candidate_selection.py", "cycle_scanner.py", "outcome_ledger.py", "event_evidence.py")
 MAPS = ("etoro_etf_map.json", "etoro_isin_map.json", "etoro_corporate_actions.json", "stooq_etf_map.json")
 
 
