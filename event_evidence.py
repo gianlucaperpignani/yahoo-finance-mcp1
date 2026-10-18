@@ -37,7 +37,8 @@ def collect(urls,registry):
             with build_opener(CheckedRedirect(set(verified))).open(Request(url,headers={"User-Agent":"eToroResearchAudit/1.0","Accept":"text/html,application/json,text/plain"}),timeout=10) as response:
                 content=response.read(1000001)
                 if len(content)>1000000: raise ValueError("DOCUMENT_TOO_LARGE")
-                record.update(status="RETRIEVED",http_status=response.status,final_url=response.url,content_sha256=hashlib.sha256(content).hexdigest(),text=content.decode("utf-8",errors="replace"))
+                decoded=content.decode('utf-8',errors='replace')
+                record.update(status="RETRIEVED",http_status=response.status,final_url=response.url,raw_content_sha256=hashlib.sha256(content).hexdigest(),content_sha256=hashlib.sha256(decoded.encode()).hexdigest(),text=decoded)
                 record["registry"]=verified[urlparse(response.url).hostname]
         except Exception as exc: record["reason"]=str(exc)[:180]
         records.append(record)
@@ -51,7 +52,7 @@ def verify(event):
         if d.get("status")!="RETRIEVED" or not isinstance(text,str) or hashlib.sha256(text.encode()).hexdigest()!=d.get("content_sha256"):
             # For non-UTF8 originals retain raw-byte SHA separately, do not certify a re-encoding.
             continue
-        if urlparse(d.get("url", "")).hostname!=r.get("host") or not r.get("verified_at"): continue
+        if urlparse(d.get("final_url") or d.get("url", "")).hostname!=r.get("host") or not r.get("verified_at"): continue
         if r.get("issuer_id")!=event.get("issuer_id") or not r.get("verification_reference") or not facts or not all(isinstance(f,str) and f and f.casefold() in text.casefold() for f in facts): continue
         if d.get("fact_review",{}).get("confirmed") is not True or not d["fact_review"].get("reference"): continue
         docs.append(d)

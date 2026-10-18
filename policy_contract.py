@@ -12,7 +12,7 @@ def sha_file(path):
 
 def load_policy(name):
     contract = json.loads((ROOT / "release_contract.json").read_text())
-    if name not in {"risk_policy.json", "screening_config.json", "adaptive_config.json"}:
+    if name not in {"risk_policy.json", "screening_config.json", "adaptive_config.json", "registry_formula_contract.json"}:
         raise ValueError("POLICY_NOT_ALLOWED")
     if sha_file(ROOT / name) != contract["policy_files"][name]:
         raise ValueError("POLICY_HASH_MISMATCH:" + name)

@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.48 - SOLA LETTURA
+#  Versione 1.7.49 - SOLA LETTURA
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
 #  18/10/2026: lacune interne isolate, indicatori su coda consecutiva;
@@ -67,7 +67,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.48"
+VERSION = "1.7.49"
 RUNTIME_MANIFEST = build_runtime_manifest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
 DEFAULT_PERIOD = "2y"
@@ -3270,7 +3270,9 @@ def get_server_status():
     return {
         "server_version": VERSION, "generated_at_utc": _utc_stamp(),
         "runtime_manifest": RUNTIME_MANIFEST,
-        "adaptive_method_version": "1.0.0",
+        "adaptive_method_version": "1.1.0",
+        "feedback_integration_version":"1.1.0",
+        "registry_formula_contract_version":"registry-formulas-1.0.0",
         "global_chat_candidate_budget": 10,
         "mandate_master_id": "14UkvOObo3bHHSdRcL72B_lWLAV6ajEBm",
         "efficiency": {"compact_response_version": COMPACT_RESPONSE_VERSION,
@@ -3355,6 +3357,15 @@ def health():
 @app.route("/status", methods=["GET"])
 def status_api():
     return jsonify(_dispatch("get_server_status", dict(request.args)))
+
+
+@app.route('/cycle-archive/<job_id>',methods=['GET'])
+def cycle_archive_route(job_id):
+    import gzip
+    try:
+        payload=gzip.compress(json.dumps(cycle_scanner.get_archive(job_id),sort_keys=True,separators=(',',':')).encode(),mtime=0)
+        return app.response_class(payload,mimetype='application/gzip',headers={'X-Content-SHA256':hashlib.sha256(payload).hexdigest()})
+    except KeyError:return jsonify({'error':'CYCLE_ARCHIVE_EXPIRED_OR_UNKNOWN'}),404
 
 
 @app.route("/etf-history", methods=["GET"])
@@ -3627,6 +3638,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "markets": {"type": "array", "items": {"type": "string", "enum": ["US", "EU"]}},
          "learning_state": {"type": "object"},
+         "learning_states": {"type": "object"},
          "pending_keys": {"type": "array", "items": {"type": "string"}}}, "required": ["markets"]}},
     {"name": "get_server_status", "annotations": RO,
      "description": "Stato del server: titoli pronti in cache, chiamate e 429 Yahoo, pausa anti-429.",
@@ -3658,10 +3670,14 @@ for _tool in TOOLS:
 def _dispatch_full(name, a):
     if name == "scan_cycle_candidates":
         state = a.get("learning_state")
+        states=a.get('learning_states') or {}
+        for key,value in states.items():
+            validate_state(value)
+            if key!=value.get('scope',{}).get('category','')+'|'+value.get('scope',{}).get('method_id',''):raise ValueError('LEARNING_SCOPE_KEY_MISMATCH')
         profile = validate_state(state)["active"] if state else "balanced"
         return cycle_scanner.request(a.get("markets", []), profile, a.get("pending_keys", []),
                                      lambda m: scan_market(m), lambda m: scan_level_b_fusion(m, 10),
-                                     profile_scope=state.get("scope") if state else None)
+                                     profile_scope=state.get("scope") if state else None,learning_states=states)
     if name == "get_etf_history":
         return get_etf_history(a.get("ticker"))
     if name == "get_market_data":

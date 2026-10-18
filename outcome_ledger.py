@@ -1,4 +1,4 @@
-"""1.0.0: closed-trade reconciliation and minimal KPI, no financial inference."""
+"""1.0.1: closed-trade KPI; calibration uses the same bins as aggregation."""
 import copy
 import hashlib
 import json
@@ -55,7 +55,7 @@ def ingest(pages, currency, prior=None, links=None):
             valid=number(net) and number(fees) and fees>=0 and number(investment) and investment>0
             link=links.get(key) or {}
             linked=(link.get("verified") is True and link.get("ticket_unchanged") is True and link.get("position_id")==trade["positionId"] and bool(link.get("signal_id")) and bool(link.get("evidence_reference")))
-            origin="COPY" if mirror else "AI_ESEGUITA" if linked else "DA_VERIFICARE"
+            origin="COPY" if mirror else "AI_ESEGUITA" if linked else link.get('origin') if link.get('origin') in {'AI_MODIFICATA','INIZIATIVA_UTENTE','NON_ESEGUITA'} else "DA_VERIFICARE"
             pnl=net-fees if valid else None
             entries[key]=dict(close_key=key,raw_hash=raw_hash,raw=trade,currency=currency,
                 origin=origin,signal_id=link.get("signal_id") if linked else None,category=link.get("category") if linked else None,
@@ -79,7 +79,7 @@ def kpis(entries):
     wins=[e["net_pnl_usd"] for e in eligible if e["net_pnl_usd"]>0]
     losses=[e["net_pnl_usd"] for e in eligible if e["net_pnl_usd"]<0]
     excess=[e["net_return"]-e["benchmark_return"] for e in eligible if number(e.get("net_return")) and number(e.get("benchmark_return"))]
-    forecasts=[e for e in eligible if number(e.get("forecast_probability")) and 0<=e["forecast_probability"]<=1 and type(e.get("direction_correct")) is bool]
+    forecasts=[e for e in values if e.get('origin')=='AI_ESEGUITA' and number(e.get("forecast_probability")) and 0<=e["forecast_probability"]<=1 and type(e.get("direction_correct")) is bool]
     bins=[]
     for lower,upper in ((0,.5),(.5,.7),(.7,.85),(.85,1.0000001)):
         sample=[e for e in forecasts if lower<=e["forecast_probability"]<upper]
@@ -96,6 +96,25 @@ def kpis(entries):
 def calibrate(probability,bins):
     if not number(probability) or not 0<=probability<=1:raise ValueError('ORIGINAL_PROBABILITY_REQUIRED')
     for row in bins:
-        if row['lower']<=probability<=row['upper'] and row.get('usable_for_calibration') and row.get('n',0)>=30 and number(row.get('empirical_probability')):
+        in_bin = row['lower'] <= probability < row['upper'] or probability == 1 and row['upper'] == 1
+        if in_bin and row.get('usable_for_calibration') and row.get('n',0)>=30 and number(row.get('empirical_probability')):
             return dict(original_probability=probability,calibrated_probability=row['empirical_probability'],n=row['n'],method='EMPIRICAL_VALIDATED_BIN_NOT_GUARANTEE')
     return dict(original_probability=probability,calibrated_probability=None,n=0,method='INSUFFICIENT_SAMPLE')
+
+
+def category_kpis(entries):
+    return {category:kpis({k:v for k,v in entries.items() if v.get('category')==category})
+            for category in ('CORE','SWING','SPECULATIVO')}
+
+
+def post_mortem_updates(entries,bundle_id):
+    """Named AA:AJ fields: caller matches close_key before writing, never append blind."""
+    return [dict(close_key=key,new_row_base_fields={'A':'PM-'+key,'B':e.get('signal_id') or 'N/D',
+        'C':e['raw'].get('openTime'),'D':e['raw'].get('closeTime'),'E':'DA COMPLETARE','F':e['raw'].get('market',{}).get('symbol') or 'N/D',
+        'P':'CORRETTA' if e.get('direction_correct') is True else 'ERRATA' if e.get('direction_correct') is False else 'N/D'},
+        fields=[e.get('category') or 'N/D',e['origin'],e.get('signal_id') or 'N/D',
+        key,bundle_id,e['net_pnl_usd'] if e['net_pnl_usd'] is not None else 'N/D',
+        e.get('initial_risk_usd') if e.get('initial_risk_usd') is not None else 'N/D',
+        e.get('forecast_probability') if e.get('forecast_probability') is not None else 'N/D',
+        e['economic_status'],'VALIDO' if type(e.get('direction_correct')) is bool and e.get('forecast_probability') is not None else 'NON_VALUTABILE'])
+        for key,e in entries.items() if e['origin'] in {'AI_ESEGUITA','AI_MODIFICATA','INIZIATIVA_UTENTE'}]
