@@ -1,4 +1,4 @@
-"""1.0.0: closed-trade reconciliation and minimal KPI, no financial inference."""
+"""1.0.1: closed-trade KPI; calibration uses the same bins as aggregation."""
 import copy
 import hashlib
 import json
@@ -96,6 +96,7 @@ def kpis(entries):
 def calibrate(probability,bins):
     if not number(probability) or not 0<=probability<=1:raise ValueError('ORIGINAL_PROBABILITY_REQUIRED')
     for row in bins:
-        if row['lower']<=probability<=row['upper'] and row.get('usable_for_calibration') and row.get('n',0)>=30 and number(row.get('empirical_probability')):
+        in_bin = row['lower'] <= probability < row['upper'] or probability == 1 and row['upper'] == 1
+        if in_bin and row.get('usable_for_calibration') and row.get('n',0)>=30 and number(row.get('empirical_probability')):
             return dict(original_probability=probability,calibrated_probability=row['empirical_probability'],n=row['n'],method='EMPIRICAL_VALIDATED_BIN_NOT_GUARANTEE')
     return dict(original_probability=probability,calibrated_probability=None,n=0,method='INSUFFICIENT_SAMPLE')
