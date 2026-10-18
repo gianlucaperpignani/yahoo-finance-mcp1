@@ -1,0 +1,18 @@
+{
+  "version": "adaptive-protocol-1.0.0",
+  "registered_at": "2026-10-18T00:00:00+00:00",
+  "max_chat_candidates": 10,
+  "min_training": 30,
+  "min_validation": 10,
+  "min_shadow": 10,
+  "min_monitoring": 10,
+  "profiles": {
+    "balanced": {"A1_VOLUME":25,"A2_TECHNICAL":25,"A3_CATALYST":25,"A5_SECTOR":15,"A4_ATTENTION":10},
+    "volume": {"A1_VOLUME":35,"A2_TECHNICAL":25,"A3_CATALYST":15,"A5_SECTOR":15,"A4_ATTENTION":10},
+    "momentum": {"A1_VOLUME":20,"A2_TECHNICAL":35,"A3_CATALYST":20,"A5_SECTOR":15,"A4_ATTENTION":10},
+    "catalyst": {"A1_VOLUME":20,"A2_TECHNICAL":20,"A3_CATALYST":35,"A5_SECTOR":15,"A4_ATTENTION":10}
+  },
+  "objective":"paired net return / initial risk; excess return and drawdown safeguards",
+  "comparison":"same complete cohort; first ranked candidate; simulated results remain simulations",
+  "parameter_activation":"monthly, sequential validation then future shadow; no financial risk rule changes"
+}

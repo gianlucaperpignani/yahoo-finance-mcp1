@@ -1,14 +1,16 @@
 {
   "schema_version": 1,
-  "version": "sprint1-1.0.0",
+  "version": "sprint2-1.0.0",
   "policy_files": {
-    "risk_policy.json": "0d9bd6e7bab0e0a9725ba4732865ae9e11fd49ada3e3bf305056c9ecee13c40a",
-    "screening_config.json": "ae3fa01f4905b0454208f42fc434d6b7d6a127e7be73487a6d3873f18c5c516a"
+    "risk_policy.json": "c5dfb823d662ae4efa1ab795bf8038dfc4627af030c3a216e7cb81b17784d003",
+    "screening_config.json": "ae3fa01f4905b0454208f42fc434d6b7d6a127e7be73487a6d3873f18c5c516a",
+    "adaptive_config.json": "60f18ce1d094c6be79473451077fdee0dd60527775de164a797dbfd8e73a8482"
   },
   "risk_engine": {
-    "version": "1.3.5",
+    "version": "1.3.6",
     "files": [
       "acquire_ecb_fx.py",
+      "adaptive_config.json",
       "etoro_risk_engine.py",
       "policy_contract.py",
       "prepare_ecb_fx.py",
@@ -17,6 +19,6 @@
       "risk_policy.json",
       "screening_config.json"
     ],
-    "package_sha256": "ddcb4fbebcddc5040c67ca11141c847e9162881d175f4664fc6384a42f8f248b"
+    "package_sha256": "859514581cd76d677e8c1ac32bf81139987831e59b38961e5c958ad2dea24841"
   }
 }
