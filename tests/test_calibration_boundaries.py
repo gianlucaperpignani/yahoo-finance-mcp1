@@ -24,5 +24,10 @@ class CalibrationBoundaries(unittest.TestCase):
         self.assertIsNone(result['calibrated_probability'])
         self.assertEqual(result['method'],'INSUFFICIENT_SAMPLE')
 
+    def test_forecast_sample_is_independent_of_missing_economic_costs(self):
+        result=kpis({'test':dict(origin='AI_ESEGUITA',economic_status='DATI_MANCANTI',net_pnl_usd=None,
+            forecast_probability=.7,direction_correct=True)})
+        self.assertEqual(result['n'],0);self.assertEqual(result['forecast_n'],1)
+
 
 if __name__=='__main__':unittest.main()

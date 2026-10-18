@@ -1621,7 +1621,7 @@ def discover_a5_sector_rotation(
 # =============================================================================
 # Level B Fusion Engine
 # =============================================================================
-FUSION_VERSION = "level-b-fusion-0.4-a5-full-sector-map"
+FUSION_VERSION = "level-b-fusion-0.5-learning-scope-capture"
 FUSION_WEIGHTS = {"A1_VOLUME": 25.0, "A2_TECHNICAL": 25.0, "A3_CATALYST": 25.0,
                   "A5_SECTOR": 15.0, "A4_ATTENTION": 10.0}
 
@@ -1712,7 +1712,7 @@ def fuse_level_b_results(*, market: str, a1: Dict[str, Any], a2: Dict[str, Any],
             if not r: continue
             if "A3" not in r["detected_by"]: r["detected_by"].append("A3")
             r["signals"]["A3"] = max(r["signals"].get("A3",0), float(x.get("catalyst_score") or 0))
-            r["a3"]={k:x.get(k) for k in ("catalyst_score","categories","actionability","rumor_present","ma_primary_confirmed")}
+            r["a3"]={k:x.get(k) for k in ("catalyst_score","categories","actionability","rumor_present","ma_primary_confirmed","top_evidence")}
             if rumor or x.get("actionability") == "WATCH_ONLY":
                 if not any(p["code"]=="CATALYST_WATCH_ONLY" for p in r["penalties"]):
                     r["penalties"].append({"code":"CATALYST_WATCH_ONLY","points":10.0})
@@ -1722,7 +1722,7 @@ def fuse_level_b_results(*, market: str, a1: Dict[str, Any], a2: Dict[str, Any],
         if not r: continue
         if "A4" not in r["detected_by"]: r["detected_by"].append("A4")
         r["signals"]["A4"] = max(r["signals"].get("A4",0), float(x.get("attention_score") or 0))
-        r["a4"]={k:x.get(k) for k in ("attention_score","categories","actionability","article_count","primary_source_present")}
+        r["a4"]={k:x.get(k) for k in ("attention_score","categories","actionability","article_count","primary_source_present","top_evidence")}
         if x.get("actionability") == "WATCH_ONLY":
             r["penalties"].append({"code":"ATTENTION_WATCH_ONLY","points":5.0})
 
@@ -1767,7 +1767,10 @@ def fuse_level_b_results(*, market: str, a1: Dict[str, Any], a2: Dict[str, Any],
         watch=any(p["code"] in ("CATALYST_WATCH_ONLY","ATTENTION_WATCH_ONLY") for p in r["penalties"])
         action="NO_CHASE" if no_chase else ("WATCH_ONLY" if watch else "FUSION_CANDIDATE")
         rows.append({"ticker":t,"name":r.get("name"),"fusion_score":round(final,1),"base_score":round(base,1),
-                     "ranking_features":{"A1_VOLUME":r["signals"].get("A1"),"A2_TECHNICAL":r["signals"].get("A2"),"A3_CATALYST":r["signals"].get("A3"),"A5_SECTOR":sector_score,"A4_ATTENTION":r["signals"].get("A4")},
+                     "ranking_features":{**{name:r['signals'].get(antenna,0.0) if not source.get('data_errors') and not source.get('source_errors') and not source.get('error') else r['signals'].get(antenna) for name,antenna,source in [('A1_VOLUME','A1',a1),('A2_TECHNICAL','A2',a2),('A3_CATALYST','A3',a3),('A4_ATTENTION','A4',a4)]},'A5_SECTOR':sector_score},
+                     "ranking_penalty":penalty,
+                     "ranking_feature_kind":"DETECTION_CONTRIBUTION; zero means no detection from available antenna, not an imputed financial value",
+                     "learning_scope":{"category":"DISCOVERY","method_id":"FUSION_"+market+"_UNION_V1"},
                      "score_components":comps,"detected_by":r["detected_by"],"signal_count":len(r["detected_by"]),
                      "sector_hint":r.get("sector_hint"),"sector_source":r.get("sector_source"),"sector_key":sk,"sector_state":sector_state,
                      "sector_score":round(sector_score,1) if sector_score is not None else None,"penalties":r["penalties"],"penalty_total":round(penalty,1),

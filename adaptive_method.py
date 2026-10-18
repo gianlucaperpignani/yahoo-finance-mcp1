@@ -12,7 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from candidate_selection import CONFIG, score, finite
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def digest(value):
@@ -55,12 +55,13 @@ def cohorts(rows, as_of):
             if not stamp(CONFIG["registered_at"]) <= start < end <= as_of: raise ValueError("TIME_ORDER")
             if stamp(row["universe_frozen_at"]) > start or not end <= stamp(row["outcomes_observed_at"]) <= as_of: raise ValueError("LOOK_AHEAD_OR_EARLY_OUTCOME")
             if row.get("complete_universe") is not True or row.get("kind") != "SHADOW_SIMULATION": raise ValueError("INCOMPLETE_OR_MIXED_COHORT")
-            if not row.get("source_reference") or row.get("category") not in {"CORE", "SWING", "SPECULATIVO"} or not row.get("method_id"): raise ValueError("COHORT_PROVENANCE")
+            if not row.get("source_reference") or row.get("category") not in {"CORE", "SWING", "SPECULATIVO", "DISCOVERY"} or not row.get("method_id"): raise ValueError("COHORT_PROVENANCE")
             candidates = row["candidates"]
             if not candidates or len({c["key"] for c in candidates}) != len(candidates): raise ValueError("CANDIDATES_INVALID")
             for c in candidates:
                 if score(c.get("features"), "balanced") is None or not all(finite(c.get(k)) for k in ("net_return", "benchmark_return", "initial_risk_fraction")): raise ValueError("OUTCOME_OR_FEATURES_MISSING")
                 if c["initial_risk_fraction"] <= 0 or c["net_return"] <= -1 or c.get("costs_included") is not True or c.get("slippage_included") is not True: raise ValueError("COSTS_OR_RISK_MISSING")
+                if not finite(c.get('ranking_penalty',0)) or c.get('ranking_penalty',0)<0:raise ValueError('RANKING_PENALTY_INVALID')
                 if stamp(c["features_recorded_at"]) > start: raise ValueError("FEATURE_LOOK_AHEAD")
             valid.append(row)
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -77,7 +78,7 @@ def cohorts(rows, as_of):
 def evaluate(rows, profile):
     returns, excess, utility = [], [], []
     for row in rows:
-        chosen = min(row["candidates"], key=lambda c: (-score(c["features"], profile), c["key"]))
+        chosen = min(row["candidates"], key=lambda c: (-max(0,score(c["features"], profile)-c.get('ranking_penalty',0)), c["key"]))
         returns.append(chosen["net_return"])
         excess.append(chosen["net_return"] - chosen["benchmark_return"])
         utility.append(chosen["net_return"] / chosen["initial_risk_fraction"])

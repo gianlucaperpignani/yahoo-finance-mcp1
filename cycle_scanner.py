@@ -2,6 +2,8 @@
 import copy
 import threading
 import time
+from datetime import datetime,timezone
+from adaptive_method import digest
 from candidate_selection import select
 
 JOBS={}
@@ -9,7 +11,7 @@ LOCK=threading.Lock()
 TTL=900
 
 
-def run(markets,profile,pending,scan_a,scan_b,clock=time.monotonic,wait=time.sleep,timeout=1800,profile_scope=None):
+def run(markets,profile,pending,scan_a,scan_b,clock=time.monotonic,wait=time.sleep,timeout=1800,profile_scope=None,learning_states=None,archive_sink=None):
     scans=[];errors=[];candidates=[];started=clock();fusion={}
     for market in markets:
         try:
@@ -29,7 +31,10 @@ def run(markets,profile,pending,scan_a,scan_b,clock=time.monotonic,wait=time.sle
         scans.append(dict(level="B",market=market,job_id=result.get("job_id"),job_status=result.get("job_status"),coverage=result.get("coverage"),limitations=result.get("limitations"),generated_at=result.get("result_generated_at_utc")))
         if result.get("job_status")!="COMPLETE": errors.append(dict(level="B",market=market,reason=result.get("reason") or "TIME_BUDGET"))
         else: candidates.extend(copy.deepcopy(result.get("shortlist",[])))
-    selection=select(dict(candidates=candidates,active_profile=profile,profile_scope=profile_scope,pending_keys=pending))
+    selection=select(dict(candidates=candidates,active_profile=profile,profile_scope=profile_scope,pending_keys=pending,learning_states=learning_states,_internal=True))
+    artifact=dict(schema_version=1,frozen_at=datetime.now(timezone.utc).isoformat(),opportunities=selection.pop('_all_rows'),coverage=scans,errors=errors)
+    artifact['archive_id']=digest(artifact)
+    if archive_sink:archive_sink(artifact)
     # Deferred candidates remain server-side. Only bounded keys return to chat.
     complete = not errors and all(s.get("scan_complete") is True for s in scans if s["level"] == "A")
     return dict(version="1.0.1",shortlist=selection["shortlist"],returned=len(selection["shortlist"]),
@@ -41,11 +46,11 @@ def run(markets,profile,pending,scan_a,scan_b,clock=time.monotonic,wait=time.sle
                 active_profile=profile,ticket_authorized=False)
 
 
-def request(markets,profile,pending,scan_a,scan_b,profile_scope=None):
+def request(markets,profile,pending,scan_a,scan_b,profile_scope=None,learning_states=None):
     markets=tuple(sorted(set(markets)))
     if not markets or any(m not in {"US","EU"} for m in markets): raise ValueError("CYCLE_MARKETS_INVALID")
     scope_key=tuple(sorted((profile_scope or {}).items()))
-    key=(markets,profile,tuple(sorted(pending)),scope_key)
+    key=(markets,profile,tuple(sorted(pending)),scope_key,digest(learning_states or {}))
     with LOCK:
         for k in list(JOBS):
             if JOBS[k].get("finished") and time.monotonic()-JOBS[k]["finished"]>TTL:del JOBS[k]
@@ -55,10 +60,20 @@ def request(markets,profile,pending,scan_a,scan_b,profile_scope=None):
             job=dict(id="cycle-"+str(time.time_ns()),state="RUNNING");JOBS[key]=job
             def worker():
                 try:
-                    result=run(markets,profile,pending,scan_a,scan_b,profile_scope=profile_scope)
+                    result=run(markets,profile,pending,scan_a,scan_b,profile_scope=profile_scope,learning_states=learning_states,archive_sink=lambda a:job.update(archive=a))
+                    result['opportunity_archive']=dict(path='/cycle-archive/'+job['id'],archive_id=job['archive']['archive_id'],expires_after_s=TTL,
+                        instruction='download directly to Python; persist in original Registro bundle; do not expand candidate pool in chat')
                     with LOCK:job.update(state="COMPLETE",result=result,finished=time.monotonic())
                 except Exception as exc:
                     with LOCK:job.update(state="ERROR",reason=str(exc)[:180],finished=time.monotonic())
             threading.Thread(target=worker,daemon=True,name="cycle-scanner").start()
         if job["state"]=="COMPLETE":return dict(copy.deepcopy(job["result"]),job_id=job["id"],job_status="COMPLETE")
         return dict(job_id=job["id"],job_status=job["state"],reason=job.get("reason"),scan_complete=False,retry_after_s=30,ticket_authorized=False)
+
+
+def get_archive(job_id):
+    with LOCK:
+        for job in JOBS.values():
+            if job['id']==job_id and job.get('archive') and job.get('finished') and time.monotonic()-job['finished']<=TTL:
+                return copy.deepcopy(job['archive'])
+    raise KeyError('CYCLE_ARCHIVE_EXPIRED_OR_UNKNOWN')

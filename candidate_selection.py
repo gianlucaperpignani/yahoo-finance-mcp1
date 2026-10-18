@@ -37,9 +37,18 @@ def select(data):
         key = key.upper().strip()
         if row.get("extended") or row.get("setup") == "ESTESO" or row.get("actionability") in {"NO_CHASE", "WATCH_ONLY"}:
             excluded.append(key); continue
-        scope=data.get("profile_scope")
-        effective=profile if not scope or (row.get("category")==scope.get("category") and row.get("method_id")==scope.get("method_id")) else "balanced"
+        row_scope=row.get('learning_scope') or {k:row.get(k) for k in ('category','method_id')}
+        states=data.get('learning_states') or {}
+        from adaptive_method import validate_state
+        matched=states.get(str(row_scope.get('category'))+'|'+str(row_scope.get('method_id')))
+        scoped=validate_state(matched) if matched else None
+        scope=scoped.get('scope') if scoped else data.get("profile_scope")
+        selected_profile=scoped['active'] if scoped else profile
+        effective=selected_profile if not scope or row_scope==scope else "balanced"
         adaptive = score(row.get("ranking_features"), effective)
+        penalty=row.get('ranking_penalty',0)
+        if not finite(penalty) or penalty<0:adaptive=None
+        elif adaptive is not None:adaptive=max(0,adaptive-penalty)
         native = row.get("fusion_score")
         row.update(key=key, selection_score=adaptive,
                    native_score=native if finite(native) and 0<=native<=100 else None, input_ordinal=ordinal,
@@ -48,6 +57,9 @@ def select(data):
         if prior:
             if prior.get("instrument_id") and row.get("instrument_id") and prior["instrument_id"] != row["instrument_id"]:
                 conflicts.append(key)
+            if score(prior.get('ranking_features'),'balanced') is None and score(row.get('ranking_features'),'balanced') is not None:
+                row['level_a_context']={k:prior.get(k) for k in ('setup','trigger','invalidation','rr')}
+                pool[key]=row
             continue
         pool[key] = row
     pending = {key.upper().strip() for key in data.get("pending_keys", []) if isinstance(key,str)}
@@ -57,9 +69,11 @@ def select(data):
         rank = r["selection_score"] if r["selection_score"] is not None else r["native_score"]
         return (r["key"] not in pending,rank is None,-rank if rank is not None else 0,r["input_ordinal"] if rank is None else 0,r["key"])
     rows.sort(key=order)
-    return dict(version="1.0.0", active_profile=profile, budget=limit,
+    out=dict(version="1.1.0", active_profile=profile, budget=limit,
                 shortlist=rows[:limit], deferred_keys=[r["key"] for r in rows[limit:]],
                 identity_conflicts=sorted(set(conflicts)), excluded_keys=sorted(set(excluded)),
                 invalid_rows=invalid,
                 monitor_positions=data.get("monitor_positions", []), union_count=len(pool),
                 ticket_authorized=False, identity_gate_required=True)
+    if data.get('_internal') is True:out['_all_rows']=rows
+    return out

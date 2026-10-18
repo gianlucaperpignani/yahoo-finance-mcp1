@@ -1,6 +1,6 @@
 # Sprint completion checkpoint — 2026-10-18
 
-Status: IN PROGRESS. This branch is not deployed. Production remains 1.7.48,
+Status: IMPLEMENTATION AND OFFLINE TESTS READY; release/live checks pending. This branch is not yet deployed. Production remains 1.7.48,
 commit 6889d763c5c09179b8f728d5bbda82df5adfbaeb. Do not report Sprint2 complete.
 No account data or private audit bundles belong in this public repository.
 
@@ -58,3 +58,13 @@ No account data or private audit bundles belong in this public repository.
 Read this file, inspect this branch head and git status, then start item1.
 Retain every completed change/test in a commit and update this checklist.
 Use the current GitHub/Drive/skill state as evidence, not earlier completion claims.
+
+## Completion implementation
+
+Collector, full opportunity archive, neutral DISCOVERY ranking scope, immutable
+execution/exit attribution, category KPIs, ordinary confidence calibration, capped
+source collector and Registry formula/mandate checks have been implemented.
+Read references/completion-flow.md in the installed scanner skill for orchestration.
+Independent offline validation: full synthetic lifecycle and missing-ID matrix passed.
+Final release must verify CI, skill push, live hashes and actual persistence.
+A scheduled-run proof requires a genuine scheduled run; do not invent one.
