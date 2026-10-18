@@ -1,6 +1,7 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.45 - SOLA LETTURA
+#  Versione 1.7.46 - SOLA LETTURA
+#  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
 #  18/10/2026: lacune interne isolate, indicatori su coda consecutiva;
 #  rischio su coppie di sedute valide, senza barre o rendimenti sintetici.
 #  18/10/2026: storico ETF Yahoo completo, fallback eToro su serie intera;
@@ -42,6 +43,8 @@ from zoneinfo import ZoneInfo
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 
 import etoro_history
+from policy_contract import T
+from runtime_manifest import build as build_runtime_manifest
 from acquire_ecb_fx import acquire as acquire_ecb_history
 from prepare_ecb_fx import target_open
 
@@ -61,7 +64,8 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.45"
+VERSION = "1.7.46"
+RUNTIME_MANIFEST = build_runtime_manifest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -2337,7 +2341,7 @@ def _corr_info(R, window):
             val = c.iat[i, j]
             if pd.notna(val):
                 mx = max(mx, abs(float(val)))
-                if abs(val) > 0.70:
+                if abs(val) > T["correlation_abs_alert"]:
                     pairs.append({"a": cols[i], "b": cols[j], "corr": _rnd(val, 2)})
     pairs.sort(key=lambda p: -abs(p["corr"]))
     return {"window": window, "obs": int(len(sub)), "max_abs": _rnd(mx, 2), "pairs_over_070": pairs[:10]}
@@ -2382,7 +2386,7 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
         issues.append("EURUSD corrente verificato mancante: conversione rischio in EUR non disponibile")
     total = sum(a["value"] for a in agg.values()) + cash + frozen + copyv
     diff = equity - total
-    tol = max((fx_eur or 0.0) * 1.0, 0.0025 * equity)
+    tol = max((fx_eur or 0.0) * T["reconciliation_floor_eur"], T["reconciliation_equity_fraction"] * equity)
     recon_ok = abs(diff) <= tol
     if not recon_ok:
         issues.append(f"Riconciliazione fallita: scarto {diff:.2f} USD oltre tolleranza {tol:.2f} USD")
@@ -2429,9 +2433,9 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
         sample = {"returns_common": int(n),
                   "start": R.index[0][0] if n else None, "end": R.index[-1][1] if n else None,
                   "no_bridge_returns": True, "alignment": "identical_start_end_session_pairs"}
-        if n < 200:
+        if n < T["history_min_returns"]:
             issues.append(f"Campione comune insufficiente: {n} rendimenti (minimo 200, ordinario 250)")
-        elif n < 250:
+        elif n < T["history_ordinary_returns"]:
             alerts.append(f"Campione provvisorio: {n} rendimenti (200-249)")
         if n >= 30:
             w = np.array([agg[t]["value"] / equity for t in port_t])
@@ -2440,9 +2444,9 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
                 issues.append("Campione settimanale insufficiente: meno di 20 finestre contigue")
             v1, v5 = result_var.get("var99_1d_pct"), result_var.get("var99_5d_pct")
             if v1 is not None and v5 is not None:
-                if v1 > 4.0 or v5 > 10.0:
+                if v1 > T["var99_daily_critical_pct"] or v5 > T["var99_weekly_critical_pct"]:
                     critical.append(f"VaR99 critico (1g {v1}%, 5g {v5}%): blocco nuovi acquisti")
-                elif v1 > 3.0 or v5 > 7.5:
+                elif v1 > T["var99_daily_alert_pct"] or v5 > T["var99_weekly_alert_pct"]:
                     alerts.append(f"SEGNALAZIONE RISCHIO: VaR99 1g {v1}% / 5g {v5}%")
             corr120 = _corr_info(R, 120)
             corr60 = _corr_info(R, 60)
@@ -2450,12 +2454,12 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
                 alerts.append("ALERT CORRELAZIONE su 120 sedute")
 
     cash_pct = cash / equity
-    if cash_pct < 0.15 or cash_pct > 0.30:
+    if cash_pct < T["cash_min_pct"] / 100 or cash_pct > T["cash_max_pct"] / 100:
         alerts.append(f"Liquidita' {cash_pct * 100:.2f}% fuori fascia 15-30%")
     for t, a in agg.items():
         wt = a["value"] / equity
-        if not a["is_etf"] and wt > 0.20:
-            alerts.append(f"Emittente {t} al {wt * 100:.1f}%" + (" (oltre 25%: no ulteriori acquisti)" if wt > 0.25 else ""))
+        if not a["is_etf"] and wt > T["issuer_alert_pct"] / 100:
+            alerts.append(f"Emittente {t} al {wt * 100:.1f}%" + (" (oltre 25%: no ulteriori acquisti)" if wt > T["issuer_purchase_limit_pct"] / 100 else ""))
 
     cand_out = None
     if cand:
@@ -2481,14 +2485,14 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
                 for t in port_t:
                     if t != ct and pd.notna(cc[t]):
                         corr_c.append({"ticker": t, "corr_120": _rnd(cc[t], 2)})
-            high = [x["ticker"] for x in corr_c if x["corr_120"] is not None and x["corr_120"] > 0.80]
+            high = [x["ticker"] for x in corr_c if x["corr_120"] is not None and x["corr_120"] > T["correlation_positive_critical"]]
             group_w = sum(new_val[t] for t in high) / equity + new_val[ct] / equity
             motivi = []
             esito = "PASS"
-            if len(Rc) < 200:
+            if len(Rc) < T["history_min_returns"]:
                 esito = "BLOCCATO PER DATI"
                 motivi.append(f"Campione comune con il candidato: {len(Rc)} rendimenti")
-            if high and group_w > 0.40:
+            if high and group_w > T["correlated_group_purchase_limit_pct"] / 100:
                 esito = "BLOCCATO PER RISCHIO"
                 motivi.append(f"Correlazione >0,80 con {', '.join(high)} e gruppo al {group_w * 100:.1f}%")
             if after and after.get("n_5d", 0) < 20:
@@ -2496,17 +2500,17 @@ def portfolio_risk(equity_usd, cash_usd, positions, copy_value_usd=0.0, candidat
                 motivi.append("Campione candidato settimanale insufficiente: meno di 20 finestre contigue")
             if after:
                 v1, v5 = after.get("var99_1d_pct"), after.get("var99_5d_pct")
-                if v1 is not None and v5 is not None and (v1 > 4.0 or v5 > 10.0):
+                if v1 is not None and v5 is not None and (v1 > T["var99_daily_critical_pct"] or v5 > T["var99_weekly_critical_pct"]):
                     esito = "BLOCCATO PER RISCHIO"
                     motivi.append(f"VaR99 dopo l'acquisto critico (1g {v1}%, 5g {v5}%)")
-                elif v1 is not None and v5 is not None and (v1 > 3.0 or v5 > 7.5) and esito == "PASS":
+                elif v1 is not None and v5 is not None and (v1 > T["var99_daily_alert_pct"] or v5 > T["var99_weekly_alert_pct"]) and esito == "PASS":
                     esito = "REVISIONE RICHIESTA"
                     motivi.append(f"VaR99 dopo l'acquisto in alert (1g {v1}%, 5g {v5}%)")
             wct = new_val[ct] / equity
-            if not cand["is_etf"] and wct > 0.25:
+            if not cand["is_etf"] and wct > T["issuer_purchase_limit_pct"] / 100:
                 esito = "BLOCCATO PER RISCHIO"
                 motivi.append(f"Emittente {ct} oltre 25% dopo l'acquisto")
-            if (cash - cand["amount"]) / equity < 0.15 and esito == "PASS":
+            if (cash - cand["amount"]) / equity < T["cash_min_pct"] / 100 and esito == "PASS":
                 esito = "REVISIONE RICHIESTA"
                 motivi.append("Liquidita' dopo l'acquisto sotto il 15%")
             cand_out.update(esito=esito, motivi=motivi, var_es_after=after, corr_with_positions=corr_c,
@@ -3262,6 +3266,7 @@ def get_server_status():
     ]
     return {
         "server_version": VERSION, "generated_at_utc": _utc_stamp(),
+        "runtime_manifest": RUNTIME_MANIFEST,
         "efficiency": {"compact_response_version": COMPACT_RESPONSE_VERSION,
                        "response_formats": ["full", "compact"],
                        "default_format": "full", "identity_batch_max": 50,
