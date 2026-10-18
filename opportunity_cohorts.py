@@ -1,4 +1,4 @@
-"""1.0.0: freeze discovery opportunities and settle them from sourced observations.
+"""1.1.0: freeze discovery opportunities and settle them from sourced observations.
 
 No orders, network, invented prices, costs or outcomes. Caller persists/readbacks
 the returned store and acquires requests through read-only market-data tools.
@@ -8,6 +8,7 @@ import copy
 from datetime import datetime
 from adaptive_method import digest, stamp
 from candidate_selection import score, finite
+from learning_sessions import exit_plan,validate_plan,validate_close,session_plan
 
 
 def scope_key(scope):
@@ -79,7 +80,7 @@ def update(data):
             rows.append(dict(cohort_id=ident,scope_key=key,category=candidates[0]['learning_scope']['category'],
                 method_id=candidates[0]['learning_scope']['method_id'],state='WAIT_ENTRY',
                 universe_frozen_at=archive['frozen_at'],source_reference=archive['archive_id'],
-                kind='SHADOW_SIMULATION',complete_universe=True,candidates=list(unique.values()),
+                kind='SHADOW_SIMULATION',outcome_protocol='session-close-1.0.0',complete_universe=True,candidates=list(unique.values()),
                 raw_universe_count=len(archive.get('opportunities',[])),comparable_count=len(unique)))
     for index,stored in enumerate(rows):
         row=copy.deepcopy(stored)
@@ -98,8 +99,13 @@ def update(data):
                 qt=stamp(q['timestamp'])
                 if not 0 <= (seen-qt).total_seconds() <= 300 or not q.get('source_reference'):raise ValueError('LEARNING_QUOTE_STALE_OR_UNSOURCED')
                 if not finite(q.get('fx_to_usd')) or q['fx_to_usd']<=0 or not q.get('fx_reference'):raise ValueError('LEARNING_FX_MISSING')
-            for q in [*quotes.values(),benchmark]:checked_quote(q)
             if row['state']=='WAIT_ENTRY':
+                for q in [*quotes.values(),benchmark]:
+                    checked_quote(q)
+                    if not q.get('identity_reference'):raise ValueError('LEARNING_IDENTITY_EVIDENCE_MISSING')
+                    session_plan(q['calendar_id'],q['timestamp'])
+                plan=validate_plan(observation['exit_plan'],quotes,benchmark,observation['observed_at'])
+                if observation['planned_exit_at']!=plan['ready_at']:raise ValueError('EXIT_PLAN_READY_TIME_MISMATCH')
                 planned=stamp(observation['planned_exit_at'])
                 if not planned>seen or not observation.get('calendar_reference'):raise ValueError('LEARNING_EXIT_CALENDAR_REQUIRED')
                 # Costs/slippage are registered ex ante and must have real evidence.
@@ -115,28 +121,30 @@ def update(data):
                     if not q.get('identity_reference'):raise ValueError('LEARNING_IDENTITY_EVIDENCE_MISSING')
                 if stamp(benchmark['timestamp'])<stamp(row['universe_frozen_at']):raise ValueError('BENCHMARK_BEFORE_FREEZE')
                 row.update(state='WAIT_EXIT',signal_at=observation['observed_at'],planned_exit_at=observation['planned_exit_at'],
-                    entry=copy.deepcopy(observation),terms=copy.deepcopy(terms))
+                    entry=copy.deepcopy(observation),terms=copy.deepcopy(terms),exit_plan=copy.deepcopy(plan))
             else:
                 if seen<stamp(row['planned_exit_at']):continue
                 entry=row['entry'];eq=entry.get('quotes') or market_rows(entry['overview'])
                 if not observation.get('session_complete') or not observation.get('calendar_reference'):raise ValueError('LEARNING_EXIT_SESSION_NOT_COMPLETE')
-                if stamp(benchmark['timestamp'])<stamp(row['planned_exit_at']) or benchmark.get('instrument_id')!=entry['benchmark'].get('instrument_id'):raise ValueError('BENCHMARK_EXIT_MISMATCH')
+                plan=row.get('exit_plan')
+                if not plan:raise ValueError('LEGACY_EXIT_PLAN_REQUIRES_MIGRATION')
+                validate_plan(plan,eq,entry['benchmark'],row['signal_at'])
+                validate_close(benchmark,plan['benchmark'],entry['benchmark'],seen)
                 for c in row['candidates']:
                     q=quotes[c['key']];e=eq[c['key']];t=row['terms'][c['key']]
-                    if q.get('instrument_id')!=e.get('instrument_id'):raise ValueError('LEARNING_IDENTITY_CHANGED')
-                    if stamp(q['timestamp']) < stamp(row['planned_exit_at']):raise ValueError('EXIT_BEFORE_HORIZON')
-                    gross=q['bid']*q['fx_to_usd']/(e['ask']*e['fx_to_usd'])-1
-                    bm=benchmark['bid']*benchmark['fx_to_usd']/(entry['benchmark']['ask']*entry['benchmark']['fx_to_usd'])-1
+                    validate_close(q,plan['entries'][c['key']],e,seen)
+                    gross=q['close']*q['fx_to_usd']/(e['ask']*e['fx_to_usd'])-1
+                    bm=benchmark['close']*benchmark['fx_to_usd']/(entry['benchmark']['ask']*entry['benchmark']['fx_to_usd'])-1
                     net=gross-t['entry_fee_fraction']-t['exit_fee_fraction']-2*t['slippage_fraction']
                     if not finite(net) or not finite(bm) or net<=-1:raise ValueError('LEARNING_RETURN_INVALID')
                     c.update(net_return=net,benchmark_return=bm,initial_risk_fraction=t['initial_risk_fraction'],
                         costs_included=True,slippage_included=True,outcome_reference=q['source_reference'])
-                row.update(state='CLOSED',closed_at=observation['observed_at'],outcomes_observed_at=observation['observed_at'],exit=copy.deepcopy(observation))
+                row.update(state='CLOSED',closed_at=row['planned_exit_at'],outcomes_observed_at=observation['observed_at'],exit=copy.deepcopy(observation),exit_session_verified=True)
             rows[index]=row
         except (KeyError,ValueError,TypeError) as exc:errors.append(dict(cohort_id=row['cohort_id'],reason=str(exc)))
     requests=[dict(cohort_id=r['cohort_id'],phase=r['state'],tickers=[c['key'] for c in r['candidates']],
-        not_before=r.get('planned_exit_at') if r['state']=='WAIT_EXIT' else r['universe_frozen_at'],
-        required=['broker_quotes','benchmark_quote','fx_sources','cost_terms_and_initial_risk' if r['state']=='WAIT_ENTRY' else 'completed_session_calendar']) for r in rows if r['state']!='CLOSED']
+        not_before=r.get('planned_exit_at') if r['state']=='WAIT_EXIT' else r['universe_frozen_at'],exit_plan=r.get('exit_plan'),
+        required=['broker_quotes','benchmark_quote','fx_sources','cost_terms_and_initial_risk' if r['state']=='WAIT_ENTRY' else 'verified_historical_close_for_exact_planned_session']) for r in rows if r['state']!='CLOSED']
     store['store_hash']=digest(store)
     return dict(store=store,closed=[r for r in rows if r['state']=='CLOSED'],requests=requests,errors=errors,
         persistence_status='PENDING_REGISTRO_READBACK',ticket_authorized=False)

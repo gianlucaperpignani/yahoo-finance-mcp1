@@ -5,6 +5,7 @@ from candidate_selection import CONFIG,select
 from level_b import fuse_level_b_results
 from cycle_scanner import run as scan
 from opportunity_cohorts import update,market_rows,build_terms
+from learning_sessions import exit_plan
 from execution_attribution import match
 from outcome_ledger import ingest,category_kpis,post_mortem_updates
 from candidate_enrichment import enrich
@@ -25,13 +26,14 @@ class CompletionTests(unittest.TestCase):
 
     def quote(self,price=100,time='2026-11-02T09:01:00+00:00',identity=1):
         return dict(instrument_id=identity,ask=price,bid=price-.1,timestamp=time,source_reference='synthetic broker',
-            fx_to_usd=1,fx_reference='synthetic USD quote',identity_reference='synthetic verified identity')
+            fx_to_usd=1,fx_reference='synthetic USD quote',identity_reference='synthetic verified identity',calendar_id='XLON',currency='USD')
 
     def entry(self):
-        return dict(observed_at='2026-11-02T09:01:00+00:00',quotes={'AAA':self.quote(),'BBB':self.quote(identity=2)},
-            benchmark=self.quote(identity=3),planned_exit_at='2026-11-03T16:00:00+00:00',calendar_reference='synthetic XNYS session',
+        entry=dict(observed_at='2026-11-02T09:01:00+00:00',quotes={'AAA':self.quote(),'BBB':self.quote(identity=2)},
+            benchmark=self.quote(identity=3),planned_exit_at='2026-11-03T16:30:00+00:00',calendar_reference='synthetic XNYS session',
             terms={k:dict(entry_fee_fraction=.001,exit_fee_fraction=.001,slippage_fraction=.001,initial_risk_fraction=.02,
                 source_reference='synthetic cost preview',risk_reference='synthetic ATR',registered_at='2026-11-02T09:01:00+00:00') for k in ('AAA','BBB')})
+        entry['exit_plan']=exit_plan(entry['quotes'],entry['benchmark'],entry['observed_at']);entry['planned_exit_at']=entry['exit_plan']['ready_at'];return entry
 
     def test_real_fusion_shape_uses_promoted_research_scope(self):
         rows=self.fusion()['shortlist'];s=initial();s.update(active='volume',scope=rows[0]['learning_scope']);s.pop('state_hash');s['state_hash']=digest(s)
@@ -57,9 +59,15 @@ class CompletionTests(unittest.TestCase):
         row=first['store']['cohorts'][0];key=row['cohort_id']
         entered=update(dict(as_of='2026-11-02T09:01:00+00:00',store=first['store'],observations={key:self.entry()}))
         self.assertEqual(entered['store']['cohorts'][0]['state'],'WAIT_EXIT')
-        exit=dict(observed_at='2026-11-03T16:00:00+00:00',session_complete=True,calendar_reference='synthetic XNYS close',
-            quotes={'AAA':self.quote(103,'2026-11-03T16:00:00+00:00'),'BBB':self.quote(99,'2026-11-03T16:00:00+00:00',2)},
-            benchmark=self.quote(101,'2026-11-03T16:00:00+00:00',3))
+        exit=dict(observed_at='2026-11-03T16:30:00+00:00',session_complete=True,calendar_reference='synthetic XNYS close',
+            quotes={'AAA':self.quote(103,'2026-11-03T16:30:00+00:00'),'BBB':self.quote(99,'2026-11-03T16:30:00+00:00',2)},
+            benchmark=self.quote(101,'2026-11-03T16:30:00+00:00',3))
+        from adaptive_method import digest
+        plan=entered['store']['cohorts'][0]['exit_plan'];entry=self.entry()
+        for name,q in [*exit['quotes'].items(),('BENCH',exit['benchmark'])]:
+            e=entry['benchmark'] if name=='BENCH' else entry['quotes'][name]
+            expected=plan['benchmark'] if name=='BENCH' else plan['entries'][name]
+            q.update(kind='SESSION_CLOSE',session_date=expected['session_date'],valued_at=expected['close_at'],retrieved_at=exit['observed_at'],price_basis='VERIFIED_DAILY_CLOSE',close=q['bid'],adjustments_reference='synthetic verified basis',entry_basis_verified=True,entry_quote_hash=digest(e))
         closed=update(dict(as_of=exit['observed_at'],store=entered['store'],observations={key:exit}))
         self.assertEqual(len(closed['closed']),1);self.assertEqual(len(closed['closed'][0]['candidates']),2)
         valid,errors=cohorts(closed['closed'],stamp(exit['observed_at']));self.assertEqual(len(valid),1);self.assertFalse(errors)
@@ -107,6 +115,15 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(len(result['cohort_collection']['requests']),1)
         self.assertEqual(result['effective_profile'],'balanced');self.assertEqual(result['kpis']['n'],0)
         self.assertTrue(result['activation_requires_persisted_state'])
+
+    def test_benchmark_identity_and_quote_session_are_required(self):
+        first=update(dict(as_of='2026-11-02T09:00:00+00:00',archive=self.archive()))
+        key=first['store']['cohorts'][0]['cohort_id'];entry=self.entry();entry['benchmark'].pop('identity_reference')
+        result=update(dict(as_of=entry['observed_at'],store=first['store'],observations={key:entry}))
+        self.assertEqual(result['store']['cohorts'][0]['state'],'WAIT_ENTRY')
+        entry=self.entry();entry['quotes']['AAA']['calendar_id']='XNYS'
+        result=update(dict(as_of=entry['observed_at'],store=first['store'],observations={key:entry}))
+        self.assertEqual(result['store']['cohorts'][0]['state'],'WAIT_ENTRY')
 
     def test_cost_and_risk_units_are_computed_from_observed_inputs(self):
         q=self.quote();q['price_unit']='USD/share'
