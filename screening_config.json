@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "version": "screening-1.0.0",
+  "authority": "technical_discovery_only_not_ticket_rules",
+  "constants": {
+    "A1_MAX_HISTORY_CHECKS": 12,
+    "A1_MAX_RESULTS": 8,
+    "A1_MIN_PRICE": 1.0,
+    "A1_MIN_CURRENT_TURNOVER": 500000.0,
+    "A1_MIN_RAW_RATIO_10D": 0.12,
+    "A1_MIN_PACE_RVOL": 1.5,
+    "A1_STRONG_PACE_RVOL": 2.0,
+    "A1_VERY_STRONG_PACE_RVOL": 3.0,
+    "A2_MAX_HISTORY_CHECKS": 15,
+    "A2_MAX_RESULTS": 8,
+    "A2_MIN_BARS": 80,
+    "A2_MIN_PRICE": 1.0,
+    "A2_MIN_TURNOVER": 500000.0,
+    "A2_VOLUME_CONFIRM": 1.2
+  }
+}

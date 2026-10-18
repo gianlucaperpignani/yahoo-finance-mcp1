@@ -1,4 +1,4 @@
-# Release 1.7.40 — 2026-10-17: A1/A2 bounded discovery; provisional history metadata.
+# Release 1.7.46 — 2026-10-18: pinned technical discovery parameters; values unchanged.
 # -*- coding: utf-8 -*-
 """
 Level B - Radar dinamico per Yahoo Finance Storico / eToro.
@@ -21,6 +21,9 @@ Il modulo restituisce shortlist tecnica, non ticket operativi.
 from __future__ import annotations
 
 import json
+from policy_contract import load_policy
+
+_SCREEN = load_policy("screening_config.json")["constants"]
 import math
 import re
 from datetime import datetime, timezone
@@ -56,16 +59,16 @@ A1_REGION_SCREENERS = {
     "FI": "most_actives_fi",
 }
 A1_DISCOVERY_COUNT_PER_REGION = 25
-A1_MAX_HISTORY_CHECKS = 12
-A1_MAX_RESULTS = 8
+A1_MAX_HISTORY_CHECKS = _SCREEN["A1_MAX_HISTORY_CHECKS"]
+A1_MAX_RESULTS = _SCREEN["A1_MAX_RESULTS"]
 
 # Filtri tecnici iniziali, volutamente non aggressivi: servono a discovery.
-A1_MIN_PRICE = 1.0
-A1_MIN_CURRENT_TURNOVER = 500_000.0  # valuta locale; solo pre-filtro grossolano
-A1_MIN_RAW_RATIO_10D = 0.12          # volume corrente / media giornaliera 10d
-A1_MIN_PACE_RVOL = 1.50              # soglia comune RVOL-at-time / fallback proxy
-A1_STRONG_PACE_RVOL = 2.00
-A1_VERY_STRONG_PACE_RVOL = 3.00
+A1_MIN_PRICE = _SCREEN["A1_MIN_PRICE"]
+A1_MIN_CURRENT_TURNOVER = _SCREEN["A1_MIN_CURRENT_TURNOVER"]  # valuta locale; solo pre-filtro grossolano
+A1_MIN_RAW_RATIO_10D = _SCREEN["A1_MIN_RAW_RATIO_10D"]          # volume corrente / media giornaliera 10d
+A1_MIN_PACE_RVOL = _SCREEN["A1_MIN_PACE_RVOL"]              # soglia comune RVOL-at-time / fallback proxy
+A1_STRONG_PACE_RVOL = _SCREEN["A1_STRONG_PACE_RVOL"]
+A1_VERY_STRONG_PACE_RVOL = _SCREEN["A1_VERY_STRONG_PACE_RVOL"]
 A1_INTRADAY_LOOKBACK = 20
 A1_INTRADAY_MIN_SESSIONS = 20
 
@@ -512,12 +515,12 @@ def discover_a1_volume(
 # A2 - Price & Momentum Radar
 # -----------------------------------------------------------------------------
 A2_VERSION = "a2-price-momentum-0.6-tolerance"
-A2_MAX_HISTORY_CHECKS = 15
-A2_MAX_RESULTS = 8
-A2_MIN_BARS = 80
-A2_MIN_PRICE = 1.0
-A2_MIN_TURNOVER = 500_000.0
-A2_VOLUME_CONFIRM = 1.20
+A2_MAX_HISTORY_CHECKS = _SCREEN["A2_MAX_HISTORY_CHECKS"]
+A2_MAX_RESULTS = _SCREEN["A2_MAX_RESULTS"]
+A2_MIN_BARS = _SCREEN["A2_MIN_BARS"]
+A2_MIN_PRICE = _SCREEN["A2_MIN_PRICE"]
+A2_MIN_TURNOVER = _SCREEN["A2_MIN_TURNOVER"]
+A2_VOLUME_CONFIRM = _SCREEN["A2_VOLUME_CONFIRM"]
 
 # Discovery: negli USA aggiungiamo i gainers; in Europa usiamo i radar nazionali
 # che Yahoo espone realmente e lasciamo dichiarati gli eventuali 404 per i paesi
