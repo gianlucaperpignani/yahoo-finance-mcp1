@@ -1,4 +1,4 @@
-"""1.1.0: acquisition -> attribution -> KPIs -> cohorts -> monthly review.
+"""1.2.0: acquisition -> exact-session outcomes -> KPIs -> monthly review.
 
 All outputs are proposals until native Registro persistence/readback. No orders.
 """
@@ -7,7 +7,7 @@ import copy
 import json
 from pathlib import Path
 from adaptive_method import review,digest,initial,validate_state
-from candidate_selection import select
+from candidate_selection import select,CONFIG
 from outcome_ledger import ingest,kpis,category_kpis,post_mortem_updates
 from execution_attribution import match
 from opportunity_cohorts import update as update_cohorts,build_terms
@@ -57,9 +57,16 @@ def run(data):
     if data.get('candidate_pipeline') is not None:
         enrichment=enrich(data['candidate_pipeline'],selection['shortlist'],data.get('event_inputs'),
             persisted.get('confidence_calibration_by_category'),as_of=data['as_of'])
-    return dict(version='1.1.0',as_of=data['as_of'],ledger=ledger,kpis=metrics,category_kpis=categories,
+    progress={}
+    for c in collection['store']['cohorts']:
+        scope=c['scope_key'];p=progress.setdefault(scope,dict(closed=0,waiting_entry=0,waiting_exit=0))
+        p[{'CLOSED':'closed','WAIT_ENTRY':'waiting_entry','WAIT_EXIT':'waiting_exit'}[c['state']]]+=1
+    for p in progress.values():
+        p['remaining_initial_comparison']=max(0,CONFIG['min_training']+CONFIG['min_validation']-p['closed'])
+        p['shadow_requires_further_future_cohorts']=True
+    return dict(version='1.2.0',as_of=data['as_of'],ledger=ledger,kpis=metrics,category_kpis=categories,
         attribution_issues=attribution['issues'],learning=learned,learning_reviews=reviews,learning_states=proposed_states,
-        cohort_collection=collection,selection=selection,enrichment=enrichment,
+        cohort_collection=collection,collector_progress=progress,selection=selection,enrichment=enrichment,
         post_mortem_updates=post_mortem_updates(ledger['entries'],data.get('bundle_id') or 'PENDING_BUNDLE_ID'),
         persistence_status='PENDING_REGISTRO_READBACK',activation_requires_persisted_state=True,ticket_authorized=False,
         effective_profile=persisted['active'],proposed_profile=learned['state']['active'],

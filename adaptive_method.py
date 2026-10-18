@@ -68,7 +68,7 @@ def cohorts(rows, as_of):
             excluded.append(dict(cohort_id=row.get("cohort_id"), reason=str(exc)))
     valid.sort(key=lambda r: (stamp(r["signal_at"]), r["cohort_id"]))
     # One category/method per comparison; overlapping cohorts are not independent.
-    groups = {(r["category"], r["method_id"]) for r in valid}
+    groups = {(r["category"], r["method_id"],r.get("outcome_protocol","LEGACY_REPLAY")) for r in valid}
     if len(groups) > 1: return [], excluded + [dict(reason="MIXED_CATEGORY_OR_METHOD")]
     if any(stamp(a["closed_at"]) > stamp(b["signal_at"]) for a, b in zip(valid, valid[1:])):
         return [], excluded + [dict(reason="OVERLAPPING_COHORTS")]

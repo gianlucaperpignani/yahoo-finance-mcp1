@@ -17,6 +17,35 @@ from adaptive_method import digest
 HOST='https://yahoo-finance-mcp1.onrender.com'
 
 
+def prepare_entry(overview,contexts,identities,cost_inputs,benchmark_key,as_of):
+    """Join raw read-only sources; missing inputs remain acquisition requests.
+
+    contexts come from verified daily histories/indicators and sourced live FX;
+    identities are actual identity-gate results for the broker instrument ID.
+    No network or guessed account-specific commission policy in this adapter.
+    """
+    from opportunity_cohorts import market_rows,build_terms
+    from learning_costs import normalize_open
+    from learning_sessions import exit_plan
+    from adaptive_method import stamp
+    quotes=market_rows(overview);technical={};previews={}
+    for key,q in quotes.items():
+        context=contexts[key];identity=identities[key]
+        if identity.get('status')!='PASS' or identity.get('instrument_id')!=q['instrument_id'] or not identity.get('reference'):raise ValueError('LEARNING_IDENTITY_NOT_VERIFIED')
+        if not 0<=(stamp(as_of)-stamp(q['timestamp'])).total_seconds()<=300:raise ValueError('LEARNING_QUOTE_STALE_OR_UNSOURCED')
+        for name in ('calendar_id','currency','fx_to_usd','fx_reference','price_unit'):
+            q[name]=context[name]
+        q.update(ticker=key,identity_reference=identity['reference'])
+        technical[key]=context['indicators']
+    benchmark=quotes.pop(benchmark_key)
+    for key in quotes:
+        c=cost_inputs[key];previews[key]=normalize_open(c['response'],c['request'],as_of,c.get('exit_fee_policy'))
+    plan=exit_plan(quotes,benchmark,as_of)
+    return dict(observed_at=as_of,quotes=quotes,benchmark=benchmark,exit_plan=plan,planned_exit_at=plan['ready_at'],
+        calendar_reference='verified per-instrument exchange calendars; '+plan['plan_hash'],
+        terms=build_terms(quotes,technical,previews,as_of),raw_overview=overview,raw_cost_inputs=cost_inputs)
+
+
 def download(path,opener=urlopen):
     if not re.fullmatch(r'/cycle-archive/cycle-\d+',path):raise ValueError('ARCHIVE_PATH_INVALID')
     with opener(HOST+path,timeout=30) as response:
