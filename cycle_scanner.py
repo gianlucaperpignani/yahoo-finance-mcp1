@@ -31,11 +31,13 @@ def run(markets,profile,pending,scan_a,scan_b,clock=time.monotonic,wait=time.sle
         else: candidates.extend(copy.deepcopy(result.get("shortlist",[])))
     selection=select(dict(candidates=candidates,active_profile=profile,profile_scope=profile_scope,pending_keys=pending))
     # Deferred candidates remain server-side. Only bounded keys return to chat.
-    return dict(version="1.0.0",shortlist=selection["shortlist"],returned=len(selection["shortlist"]),
+    complete = not errors and all(s.get("scan_complete") is True for s in scans if s["level"] == "A")
+    return dict(version="1.0.1",shortlist=selection["shortlist"],returned=len(selection["shortlist"]),
                 global_budget=selection["budget"],union_count=selection["union_count"],
                 deferred_count=len(selection["deferred_keys"]),identity_conflicts=selection["identity_conflicts"],
                 invalid_candidates=selection['invalid_rows'],
-                coverage=scans,errors=errors,scan_complete=not errors,coverage_is_not_ticket_validation=True,
+                coverage=scans,errors=errors,scan_complete=complete,technical_jobs_finished=not errors,
+                coverage_is_not_ticket_validation=True,
                 active_profile=profile,ticket_authorized=False)
 
 

@@ -86,6 +86,12 @@ class BudgetTests(unittest.TestCase):
         r=cycle_scan(['US'],'balanced',[],a,failure)
         self.assertEqual(r['returned'],1);self.assertFalse(r['scan_complete']);self.assertTrue(r['errors'])
 
+    def test_finished_jobs_do_not_certify_partial_market_coverage(self):
+        a=lambda m:dict(shortlist=[dict(ticker='A')],scan_complete=False)
+        b=lambda m:dict(job_status='COMPLETE',shortlist=[])
+        r=cycle_scan(['US'],'balanced',[],a,b)
+        self.assertTrue(r['technical_jobs_finished']);self.assertFalse(r['scan_complete'])
+
 
 class OutcomeTests(unittest.TestCase):
     def trade(self):return dict(positionId=1,orderId=2,openTime='2026-10-01',closeTime='2026-10-02',units=1,investment=100,netProfit=12,fees=2,isMirrorTrade=False,parentPositionId=0,socialTradeId=None)

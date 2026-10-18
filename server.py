@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.47 - SOLA LETTURA
+#  Versione 1.7.48 - SOLA LETTURA
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
 #  18/10/2026: lacune interne isolate, indicatori su coda consecutiva;
@@ -67,7 +67,7 @@ app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.47"
+VERSION = "1.7.48"
 RUNTIME_MANIFEST = build_runtime_manifest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
 DEFAULT_PERIOD = "2y"
