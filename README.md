@@ -1,5 +1,5 @@
 # yahoo-finance-mcp1
-# Sprint 2 — release 1.7.58
+# Sprint 2 — release 1.7.59
 
 Policy quantitative e parametri discovery sono distinti in `risk_policy.json`
 e `screening_config.json`. `release_contract.json` ne fissa gli SHA e il pin
@@ -53,6 +53,11 @@ read-only senza inventare costi di uscita. Il campione reale resta da maturare.
 Release1.7.56 collega il collettore read-only al cron `/warm` esistente.
 Non attivare prima di pubblicare ArchiveGateway1.2.0. Istruzioni e limiti
 sono in `apps_script/SETUP.md`, sezione Collettore autonomo.
+
+Release1.7.59: recupero una tantum delle attività bloccate dai soli errori
+transitori di archivio. Mantiene identità, argomenti e riferimenti originali,
+registra errore e tentativi precedenti e verifica il checkpoint prima di
+eseguire. Non riapre ciclicamente tentativi esauriti o errori di autenticazione.
 
 Release1.7.58: richieste gateway serializzate nel processo, retry limitati
 del probe transitorio e restore cache a quattro bucket per tick. Status compatto

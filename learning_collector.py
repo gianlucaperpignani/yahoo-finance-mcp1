@@ -17,7 +17,28 @@ from feedback_cycle import run as feedback
 from learning_sources import Pending,now
 from etoro_learning_client import ReadFailure
 
-VERSION='1.0.0';MAX_ATTEMPTS=3;LEASE_SECONDS=600
+VERSION='1.1.0';MAX_ATTEMPTS=3;LEASE_SECONDS=600
+ARCHIVE_RECOVERY_VERSION='archive-recovery-1'
+RECOVERABLE_ARCHIVE_ERRORS={'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}
+
+
+def recover_archive_tasks(state,as_of):
+    """One bounded retry window after transient archive failure, with audit.
+
+    Keep the same task identity, arguments and raw references. This migration
+    cannot reset a second exhausted window or revive an authentication failure.
+    The caller must checkpoint it before executing any recovered task.
+    """
+    recovered=0
+    for task in state['tasks'].values():
+        if (task['state']!='BLOCKED' or task.get('error') not in RECOVERABLE_ARCHIVE_ERRORS
+                or task.get('archive_recovery',{}).get('version')==ARCHIVE_RECOVERY_VERSION):continue
+        task['archive_recovery']=dict(version=ARCHIVE_RECOVERY_VERSION,at=as_of,
+            previous_error=task['error'],previous_attempts=task['attempts'])
+        task.update(state='RETRY',attempts=0,not_before=as_of,error=None)
+        task.pop('lease_owner',None);task.pop('lease_until',None)
+        recovered+=1
+    return recovered
 
 
 def one_store(row):
@@ -134,6 +155,8 @@ class Worker:
                     state['source_generation']=generation
                 state['account_check_ref']=remember(store,state,profile)
                 self.account_binding=binding;self.account_failures=0
+            if recover_archive_tasks(state,self.clock()):
+                head=store.save(state,head) # Recovery must be durable before reads.
             plan(state,self.clock())
             # Up to four small completed blocks per wake; pending market/exit
             # conditions do not consume the three error retry attempts.
@@ -194,6 +217,7 @@ class Worker:
             with self.lock:self.info.update(state='READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=sum(t['state']=='BLOCKED' for t in pending),
                 issues=sorted(set(t.get('error') for t in pending if t.get('error')))[:8],last_checked_at=self.clock(),account_verified=state['account_verified'],
                 restored_checkpoint=restored,checkpoint_object_id=head,ledger_entries=ledger_count,
+                recovered_archive_tasks=sum(bool(t.get('archive_recovery')) for t in state['tasks'].values()),
                 source_registry_sha=state['source_registry_sha'])
         except Conflict:
             with self.lock:self.info.update(state='WAIT_OTHER_WORKER',checkpoint_verified=False)

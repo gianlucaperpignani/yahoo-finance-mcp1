@@ -8,7 +8,7 @@ from adaptive_method import digest
 from archive_client import ArchiveError
 from collector_store import Conflict
 from opportunity_cohorts import update
-from learning_collector import Worker,add_task,eligible,MAX_ATTEMPTS,initialize
+from learning_collector import Worker,add_task,eligible,MAX_ATTEMPTS,initialize,recover_archive_tasks
 from learning_sources import Pending,account_fingerprint
 from etoro_learning_client import Client,ReadFailure
 import test_completion_flow as fixtures
@@ -93,6 +93,57 @@ class CheckpointTests(unittest.TestCase):
         state['tasks'].clear()
         self.assertEqual(add_task(state,'FEEDBACK','2026-11',{}),ident)
         self.assertEqual(state['tasks'],{})
+    def test_transient_archive_recovery_preserves_identity_and_is_bounded(self):
+        state=dict(tasks={})
+        ident=add_task(state,'ENTRY','cohort',dict(cohort='synthetic-cohort'))
+        task=state['tasks'][ident]
+        task.update(state='BLOCKED',attempts=3,error='ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED',
+            raw_response_ref='original-raw',lease_owner='old-worker',lease_until=self.clock[0])
+        arguments=copy.deepcopy(task['arguments'])
+        self.assertEqual(recover_archive_tasks(state,self.clock[0]),1)
+        self.assertEqual(task['id'],ident);self.assertEqual(task['arguments'],arguments)
+        self.assertEqual(task['raw_response_ref'],'original-raw')
+        self.assertEqual(task['state'],'RETRY');self.assertEqual(task['attempts'],0)
+        self.assertEqual(task['archive_recovery']['previous_attempts'],3)
+        self.assertNotIn('lease_owner',task);self.assertNotIn('lease_until',task)
+        task.update(state='BLOCKED',attempts=3,error='ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED')
+        self.assertEqual(recover_archive_tasks(state,self.clock[0]),0)
+        self.assertEqual(task['attempts'],3)
+    def test_recovery_excludes_authentication_invalid_data_and_other_states(self):
+        state=dict(tasks={})
+        for code in ['ETORO_HTTP_403','ARCHIVE_SIGNATURE_INVALID','COLLECTOR_HASH_INVALID','MAX_ATTEMPTS_AFTER_INTERRUPTION']:
+            ident=add_task(state,'HISTORY',code,{})
+            state['tasks'][ident].update(state='BLOCKED',attempts=3,error=code)
+        for status in ['DONE','RUNNING','PENDING','RETRY']:
+            ident=add_task(state,'HISTORY',status,{})
+            state['tasks'][ident].update(state=status,attempts=3,error='ARCHIVE_REQUEST_OR_RESPONSE_FAILED')
+        before=copy.deepcopy(state)
+        self.assertEqual(recover_archive_tasks(state,self.clock[0]),0);self.assertEqual(state,before)
+    def test_recovered_entry_waits_for_market_and_survives_worker_restart(self):
+        self.clock[0]='2026-11-02T09:00:00+00:00'
+        state=initialize(self.store);state.update(account_verified=True,tasks={})
+        cohort=next(iter(state['cohorts']))
+        ident=add_task(state,'ENTRY',cohort,dict(cohort=cohort))
+        state['tasks'][ident].update(state='BLOCKED',attempts=3,error='ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED')
+        self.store.save(state,None)
+        for _ in range(3):self.wake()
+        task=self.store.value['tasks'][ident]
+        self.assertEqual(task['state'],'PENDING');self.assertEqual(task['error'],'WAIT_OPEN_SESSION')
+        self.assertEqual(task['attempts'],0)
+        self.clock[0]='2026-11-02T09:06:00+00:00'
+        for _ in range(3):self.wake()
+        self.assertEqual(self.store.value['tasks'][ident]['state'],'DONE')
+        self.assertEqual(next(iter(self.store.value['cohorts'].values()))['state'],'WAIT_EXIT')
+    def test_recovery_checkpoint_failure_prevents_execution(self):
+        state=initialize(self.store);state.update(account_verified=True,tasks={})
+        ident=add_task(state,'DISCOVER','recover',{})
+        state['tasks'][ident].update(state='BLOCKED',attempts=3,error='ARCHIVE_REQUEST_OR_RESPONSE_FAILED')
+        self.store.save(state,None);self.store.fail_save=True
+        worker=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0])
+        with patch.object(worker,'execute') as execute:worker._run()
+        execute.assert_not_called()
+        self.assertEqual(self.store.value['tasks'][ident]['state'],'BLOCKED')
+        self.assertEqual(worker.status()['state'],'ERROR')
     def test_account_mismatch_cannot_collect_trade_history(self):
         with patch.object(self.sources,'verify_account',side_effect=ReadFailure('COLLECTOR_ACCOUNT_MISMATCH',permanent=True)):
             w=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0]);w._run()
