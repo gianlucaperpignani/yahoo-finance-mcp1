@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.51 - SOLA LETTURA
+#  Versione 1.7.52 - SOLA LETTURA
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
 #  18/10/2026: lacune interne isolate, indicatori su coda consecutiva;
@@ -75,7 +75,7 @@ def _ensure_archive_probe():
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.51"
+VERSION = "1.7.52"
 RUNTIME_MANIFEST = build_runtime_manifest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
 DEFAULT_PERIOD = "2y"
@@ -3279,6 +3279,7 @@ def get_server_status():
         "server_version": VERSION, "generated_at_utc": _utc_stamp(),
         "runtime_manifest": RUNTIME_MANIFEST,
         "persistent_archive": archive_runtime.status(),
+        "scan_archive_collector": cycle_scanner.status(),
         "adaptive_method_version": "1.1.0",
         "feedback_integration_version":"1.2.0",
         "opportunity_collector_version":"session-close-1.0.0",
@@ -3374,9 +3375,10 @@ def status_api():
 def cycle_archive_route(job_id):
     import gzip
     try:
-        payload=gzip.compress(json.dumps(cycle_scanner.get_archive(job_id),sort_keys=True,separators=(',',':')).encode(),mtime=0)
+        payload=gzip.compress(json.dumps(cycle_scanner.get_archive(job_id, request.args.get("archive_object_id")),sort_keys=True,separators=(',',':')).encode(),mtime=0)
         return app.response_class(payload,mimetype='application/gzip',headers={'X-Content-SHA256':hashlib.sha256(payload).hexdigest()})
     except KeyError:return jsonify({'error':'CYCLE_ARCHIVE_EXPIRED_OR_UNKNOWN'}),404
+    except Exception:return jsonify({'error':'SCAN_ARCHIVE_RECOVERY_FAILED'}),503
 
 
 @app.route("/etf-history", methods=["GET"])
