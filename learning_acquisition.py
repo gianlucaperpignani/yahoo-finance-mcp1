@@ -1,4 +1,4 @@
-"""1.0.0: download frozen public market opportunities directly into Python.
+"""1.0.1: download frozen public market opportunities directly into Python.
 
 No universe or deferred tickers are printed into the chat. The scheduled caller
 uses returned acquisition requests internally, persists raw responses and then
@@ -47,7 +47,7 @@ def prepare_entry(overview,contexts,identities,cost_inputs,benchmark_key,as_of):
 
 
 def download(path,opener=urlopen):
-    if not re.fullmatch(r'/cycle-archive/cycle-\d+',path):raise ValueError('ARCHIVE_PATH_INVALID')
+    if not re.fullmatch(r'/cycle-archive/cycle-\d+(?:\?archive_object_id=[0-9a-f]{64})?',path):raise ValueError('ARCHIVE_PATH_INVALID')
     with opener(HOST+path,timeout=30) as response:
         if urlparse(response.url).netloc!=urlparse(HOST).netloc:raise ValueError('ARCHIVE_REDIRECT_INVALID')
         blob=response.read(2000001)
