@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.50 - SOLA LETTURA
+#  Versione 1.7.51 - SOLA LETTURA
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
 #  18/10/2026: lacune interne isolate, indicatori su coda consecutiva;
@@ -47,6 +47,7 @@ import etoro_history
 from policy_contract import T
 from runtime_manifest import build as build_runtime_manifest
 import cycle_scanner
+from archive_runtime import runtime as archive_runtime
 from adaptive_method import validate_state
 from acquire_ecb_fx import acquire as acquire_ecb_history
 from prepare_ecb_fx import target_open
@@ -64,10 +65,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("yfs")
 app = Flask(__name__)
 
+
+@app.before_request
+def _ensure_archive_probe():
+    # Start inside the serving PID, after any Gunicorn fork; never block HTTP.
+    archive_runtime.start()
+
+
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.50"
+VERSION = "1.7.51"
 RUNTIME_MANIFEST = build_runtime_manifest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
 DEFAULT_PERIOD = "2y"
@@ -3270,6 +3278,7 @@ def get_server_status():
     return {
         "server_version": VERSION, "generated_at_utc": _utc_stamp(),
         "runtime_manifest": RUNTIME_MANIFEST,
+        "persistent_archive": archive_runtime.status(),
         "adaptive_method_version": "1.1.0",
         "feedback_integration_version":"1.2.0",
         "opportunity_collector_version":"session-close-1.0.0",
