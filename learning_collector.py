@@ -242,6 +242,7 @@ class Worker:
         if op=='HISTORY':
             page=self.sources.history_page(args['minimum'],args['page'],task['id'])
             prior=store.get(state['ledger_ref'])
+            old_ref=state['ledger_ref']
             from execution_attribution import match
             state['ticket_records']=store.tickets()
             attribution=match(page['trades'],state['ticket_records'])
@@ -254,8 +255,14 @@ class Worker:
             one=dict(page,page=1)
             ledger=ingest([one],'USD',prior=prior,links=state.get('execution_links',{}))
             state['ledger_ref']=remember(store,state,ledger['entries'])
+            state['history_dirty']=state.get('history_dirty',False) or old_ref!=state['ledger_ref']
             if page['hasMore']:add_task(state,'HISTORY',task['key']+'/p'+str(args['page']+1),dict(minimum=args['minimum'],page=args['page']+1))
-            else:state['history_complete_at']=self.clock()
+            else:
+                state['history_complete_at']=self.clock()
+                if state.get('history_dirty'):
+                    event_ref=self.event(state,store,'AUTONOMOUS_LEDGER_UPDATE',task['id'],self.clock())
+                    add_task(state,'PUBLISH',task['id'],dict(event_ref=event_ref))
+                    state['history_dirty']=False
             state['ledger_kpis']=kpis(ledger['entries']);state['category_kpis']=category_kpis(ledger['entries'])
             return dict(page=page,ledger_errors=ledger['errors'],attribution_issues=attribution['issues'],ticket_records_observed=len(state['ticket_records']),coverage_certified=False)
         if op=='CONTEXT':

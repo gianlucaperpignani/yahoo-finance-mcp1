@@ -10,7 +10,7 @@ import threading
 import time
 from archive_client import ArchiveClient, ArchiveError, canonical, digest, configuration_status
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 PROBE_RUN = 'RUN-20261025-000000'
 PROBE_PAYLOAD = {'kind': 'persistent archive runtime probe', 'schema': 1, 'no_account_data': True}
 PROBE_SHA = digest(canonical(PROBE_PAYLOAD))
@@ -40,11 +40,12 @@ def probe(factory=ArchiveClient.from_env):
 
 
 class ArchiveRuntime:
-    def __init__(self, factory=ArchiveClient.from_env, config=configuration_status):
+    def __init__(self, factory=ArchiveClient.from_env, config=configuration_status, clock=time.monotonic):
         self.factory = factory
         self.config = config
         self.lock = threading.Lock()
         self.pid = None
+        self.clock=clock;self.attempts=0;self.next_attempt=0
         self.state = dict(state='NOT_STARTED', durable_storage_verified=False)
 
     def start(self):
@@ -52,12 +53,15 @@ class ArchiveRuntime:
         with self.lock:
             pid = os.getpid()
             if self.pid == pid:
-                return
+                transient=self.state.get('error') in {'ARCHIVE_REQUEST_OR_RESPONSE_FAILED','ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED'}
+                if not transient or self.attempts>=3 or self.clock()<self.next_attempt:return
+            else:self.attempts=0
             self.pid = pid
+            self.attempts+=1;self.next_attempt=self.clock()+60*self.attempts
             cfg = self.config()
             self.state = dict(version=VERSION, configured=cfg['configured'],
                               state='RUNNING' if cfg['configured'] else 'NOT_CONFIGURED',
-                              durable_storage_verified=False, started_at_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+                              durable_storage_verified=False,attempts=self.attempts, started_at_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
             if cfg['configured']:
                 threading.Thread(target=self._run, args=(pid,), name='archive-probe', daemon=True).start()
 

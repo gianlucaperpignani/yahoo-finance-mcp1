@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.57 - SOLA LETTURA
+#  Versione 1.7.58 - SOLA LETTURA
 #  25/10/2026: cache prezzi persistente e preraccolta tecnica tramite /warm.
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
@@ -53,6 +53,7 @@ from cron_collector import runtime as cron_collector_runtime
 from learning_collector import Worker as LearningWorker
 from learning_sources import Sources as LearningSources
 from archive_runtime import runtime as archive_runtime
+from archive_client import io_metrics
 from adaptive_method import validate_state
 from acquire_ecb_fx import acquire as acquire_ecb_history
 from prepare_ecb_fx import target_open
@@ -81,7 +82,7 @@ def _ensure_archive_probe():
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.57"
+VERSION = "1.7.58"
 RUNTIME_MANIFEST = build_runtime_manifest()
 PRICE_CACHE_COMPAT = hashlib.sha256(json.dumps(dict(schema=1,maps=RUNTIME_MANIFEST["maps_sha256"],policy=RUNTIME_MANIFEST["policy_files"]),sort_keys=True).encode()).hexdigest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
@@ -1008,7 +1009,7 @@ def verify_instrument_identity(yahoo_ticker, yahoo_name=None, yahoo_isin=None,
 # -----------------------------------------------------------------------------
 # Risposte compatte: sola presentazione, nessuna cache degli esiti di rischio.
 # -----------------------------------------------------------------------------
-COMPACT_RESPONSE_VERSION = "compact-response-1.0.0"
+COMPACT_RESPONSE_VERSION = "compact-response-1.1.0"
 COMPACT_TOOLS = {"get_market_data", "scan_market", "get_server_status",
                  "verify_instrument_identity", "verify_instrument_identities"}
 
@@ -1050,6 +1051,10 @@ def _format_response(name, data, response_format=None):
         out["coverage_summary"] = dict(data.get("coverage_summary") or {})
         out["coverage_summary"]["percentage_denominator"] = data.get("universe_size")
     elif name == "get_server_status":
+        manifest=out.pop('runtime_manifest',{})
+        out['runtime_manifest_ref']={k:manifest.get(k) for k in ('server_commit','release_contract_sha256','policy_files','expected_risk_engine','installed_dependencies')}
+        out['runtime_manifest_ref'].update(sha256=hashlib.sha256(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()).hexdigest(),full_request={'tool':name,'response_format':'full'})
+        omitted.append('runtime_manifest')
         # Campioni, anomalie e tutte le metriche operative restano disponibili.
         for key in ("portfolio_watch",):
             if key in out:
@@ -3317,9 +3322,9 @@ def get_server_status():
         "registry_formula_contract_version":"registry-formulas-1.0.0",
         "global_chat_candidate_budget": 10,
         "mandate_master_id": "14UkvOObo3bHHSdRcL72B_lWLAV6ajEBm",
-        "efficiency": {"compact_response_version": COMPACT_RESPONSE_VERSION,
+        "efficiency": {"archive_io":io_metrics(),"tokens":None,"token_measurement":"N/D - not exposed by runtime","compact_response_version": COMPACT_RESPONSE_VERSION,
                        "response_formats": ["full", "compact"],
-                       "default_format": "full", "identity_batch_max": 50,
+                       "default_format": "compact for status; full for histories", "identity_batch_max": 50,
                        "portfolio_risk_result_cache": False,
                        "skill_risk_engine_migrated": False},
         "etoro_isin_map_size": len(ETORO_ISIN_MAP),
@@ -3704,7 +3709,7 @@ TOOLS.append({
 for _tool in TOOLS:
     if _tool["name"] in COMPACT_TOOLS:
         _tool["inputSchema"]["properties"]["response_format"] = {
-            "type": "string", "enum": ["full", "compact"], "default": "full",
+            "type": "string", "enum": ["full", "compact"], "default": "compact" if _tool["name"]=="get_server_status" else "full",
             "description": "compact riduce dettagli ripetuti; full conserva la risposta originale. "
                            "Per calcoli esterni sugli storici usare full."}
 
@@ -3765,7 +3770,7 @@ def _dispatch_full(name, a):
 
 def _dispatch(name, a):
     # Convalida prima di acquisire dati: un formato errato non consuma quote.
-    mode = _response_format(a.get("response_format"))
+    mode = _response_format(a.get("response_format",'compact' if name=='get_server_status' else None))
     return _format_response(name, _dispatch_full(name, a), mode)
 
 
