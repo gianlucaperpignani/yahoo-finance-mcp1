@@ -12,7 +12,7 @@ import time
 import zlib
 from archive_client import ArchiveClient, ArchiveError, canonical, digest, MAX_PAYLOAD_BYTES, configuration_status
 
-VERSION='1.0.1'
+VERSION='1.1.0'
 BUCKETS=32
 MAX_AGE=4*86400
 MAX_BLOB=512000
@@ -82,6 +82,7 @@ class PriceCache:
         self.refs={};self.head_id=None;self.verified={};self.last_attempt=0
         self.info=dict(version=VERSION,state='NOT_STARTED',restored_entries=0,verified_entries=0)
         self.restored=set();self.cursor=0
+        self.restore_plan=None;self.restore_cursor=0
     def is_verified(self,key,entry):
         return self.verified.get(key)==(entry.get('ts'),hashlib.sha256(entry.get('blob',b'')).hexdigest())
     def _signature(self,entry):return entry.get('ts'),hashlib.sha256(entry['blob']).hexdigest()
@@ -96,24 +97,30 @@ class PriceCache:
     def _work(self,cache,cache_lock,compat,max_items):
         try:
             store=self.factory()
-            if not self.ready:self.restore(store,cache,cache_lock,compat,max_items)
+            if not self.ready:self.restore(store,cache,cache_lock,compat,max_items,budget=4)
             else:self.flush(store,cache,cache_lock,compat)
-            with self.lock:self.info.update(state='READY',error=None,verified_entries=len(self.verified))
+            with self.lock:self.info.update(state='READY' if self.ready else 'RESTORING',error=None,verified_entries=len(self.verified))
         except ArchiveError as exc:
-            if str(exc) in {'ARCHIVE_REMOTE_REJECTED:CACHE_HEAD_CONFLICT','PRICE_CACHE_HEAD_READBACK_INVALID'}:self.ready=False
+            if str(exc) in {'ARCHIVE_REMOTE_REJECTED:CACHE_HEAD_CONFLICT','PRICE_CACHE_HEAD_READBACK_INVALID'}:
+                self.ready=False;self.restore_plan=None;self.restore_cursor=0
             with self.lock:self.info.update(state='ERROR',error=str(exc))
         except Exception:
             with self.lock:self.info.update(state='ERROR',error='PRICE_CACHE_IO_FAILED')
         finally:
             with self.lock:self.busy=False
-    def restore(self,store,cache,lock,compat,max_items):
-        head=store.head();refs={}
+    def restore(self,store,cache,lock,compat,max_items,budget=BUCKETS):
+        if self.restore_plan is None:
+            head=store.head();refs={}
+            if head:
+                manifest=store.get(head['object_id'],'PRICE_CACHE_MANIFEST')
+                if manifest.get('compat')==compat:refs=manifest.get('buckets',{})
+            if not isinstance(refs,dict) or len(refs)>BUCKETS:raise ArchiveError('PRICE_CACHE_MANIFEST_INVALID')
+            self.restore_plan=(head,refs);self.restore_cursor=0
+        head,refs=self.restore_plan
         if head:
-            manifest=store.get(head['object_id'],'PRICE_CACHE_MANIFEST')
-            if manifest.get('compat')==compat:
-                refs=manifest.get('buckets',{})
+            if refs:
                 if not isinstance(refs,dict) or len(refs)>BUCKETS:raise ArchiveError('PRICE_CACHE_MANIFEST_INVALID')
-                for name,key in sorted(refs.items()):
+                for name,key in sorted(refs.items())[self.restore_cursor:self.restore_cursor+budget]:
                     part=store.get(key,'PRICE_CACHE_BATCH')
                     if part.get('compat')!=compat or str(part.get('bucket'))!=name:raise ArchiveError('PRICE_CACHE_BUCKET_INVALID')
                     rows=part.get('entries',[])
@@ -130,7 +137,10 @@ class PriceCache:
                             if cache[k]['ts']==entry['ts']:
                                 self.verified[k]=self._signature(entry)
                                 self.restored.add(k);self.info['restored_entries']=len(self.restored)
+                    self.restore_cursor+=1
+                if self.restore_cursor<len(refs):return
         self.head_id=head['object_id'] if head else None;self.refs=refs;self.ready=True
+        self.restore_plan=None
     def flush(self,store,cache,lock,compat):
         with lock:
             snapshot={k:dict(v) for k,v in cache.items() if k.startswith('s:') and len(k.split(':'))==6 and k.split(':')[3]=='1d' and 'blob' in v and 0<=self.clock()-v['ts']<MAX_AGE}
@@ -158,6 +168,7 @@ def _after_fork():
     runtime.lock=threading.Lock();runtime.busy=False;runtime.ready=False
     runtime.last_attempt=0;runtime.refs={};runtime.head_id=None;runtime.verified={}
     runtime.restored=set();runtime.info=dict(version=VERSION,state='NOT_STARTED',restored_entries=0,verified_entries=0)
+    runtime.restore_plan=None;runtime.restore_cursor=0
 
 import os
 if hasattr(os,'register_at_fork'):os.register_at_fork(after_in_child=_after_fork)

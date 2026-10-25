@@ -11,10 +11,24 @@ import os
 import re
 import secrets
 import time
+import threading
 from urllib.parse import urlparse
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 VERSION = '1.0.0'
+_GATEWAY_LOCK=threading.Lock()
+_METRICS_LOCK=threading.Lock()
+_METRICS=dict(calls=0,request_bytes=0,response_bytes=0,failures=0,by_action={})
+
+def io_metrics():
+    import copy
+    with _METRICS_LOCK:return copy.deepcopy(_METRICS)
+
+def _after_fork():
+    global _GATEWAY_LOCK,_METRICS_LOCK
+    _GATEWAY_LOCK=threading.Lock();_METRICS_LOCK=threading.Lock()
+
+if hasattr(os,'register_at_fork'):os.register_at_fork(after_in_child=_after_fork)
 MAX_PAYLOAD_BYTES = 2_000_000
 KINDS = {'SCAN_ARCHIVE','COHORT_STORE','LEARNING_STATE','FEEDBACK','RISK_BUNDLE',
          'CHECKPOINT','RAW_MARKET_DATA','TECHNICAL_TEST'}
@@ -61,10 +75,24 @@ class ArchiveClient:
         return cls(os.environ.get('ARCHIVE_WEBAPP_URL',''),os.environ.get('ARCHIVE_HMAC_SECRET',''))
 
     def _call(self,action,**fields):
+        # Serialize calls within one serving process before issuing a nonce.
+        # Avoid filling the Apps Script lock queue with our own background IO.
+        with _GATEWAY_LOCK:
+            with _METRICS_LOCK:
+                _METRICS['calls']+=1
+                _METRICS['by_action'][action]=_METRICS['by_action'].get(action,0)+1
+            try:return self._call_serial(action,**fields)
+            except Exception:
+                with _METRICS_LOCK:_METRICS['failures']+=1
+                raise
+
+    def _call_serial(self,action,**fields):
         nonce=secrets.token_hex(16)
         msg=canonical(dict(protocol=1,action=action,timestamp=int(self.clock()),nonce=nonce,**fields))
         signature=hmac.new(self.secret,msg.encode(),hashlib.sha256).hexdigest()
-        req=Request(self.url,data=canonical(dict(message=msg,signature=signature)).encode(),
+        body=canonical(dict(message=msg,signature=signature)).encode()
+        with _METRICS_LOCK:_METRICS['request_bytes']+=len(body)
+        req=Request(self.url,data=body,
                     headers={'Content-Type':'application/json','User-Agent':'etoro-archive/1.0.0'})
         try:
             with self.opener(req,timeout=25) as response:
@@ -72,6 +100,7 @@ class ArchiveClient:
                 if target.scheme!='https' or target.hostname not in {'script.google.com','script.googleusercontent.com'}:
                     raise ArchiveError('ARCHIVE_RESPONSE_ORIGIN_REJECTED')
                 raw=response.read(4_500_001)
+            with _METRICS_LOCK:_METRICS['response_bytes']+=len(raw)
             if len(raw)>4_500_000:raise ArchiveError('ARCHIVE_RESPONSE_TOO_LARGE')
             envelope=json.loads(raw)
             text=envelope['message'];sig=envelope['signature']
