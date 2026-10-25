@@ -67,3 +67,22 @@ assert.equal(call(envelope('collector_finish',{slot_key:'2026-10-26|09:20',claim
 assert.equal(call(envelope('collector_finish',{slot_key:'2026-10-26|09:20',claim_token:claim.claim_token,object_id:scanFields.object_id})).finished,true);
 assert.equal(call(envelope('collector_claim',{slot_key:'2026-10-26|09:20'})).claimed,false);
 console.log('Price cache CAS, idempotence, private namespace, no Registry flood, collector dedup: PASS');
+
+// Learning objects/checkpoints are private namespaces with CAS, separate from prices.
+function learnFields(value){const payload_json=JSON.stringify(value),payload_sha256=sha(payload_json);return {payload_json,payload_sha256,object_id:sha(value.kind+'\n'+payload_sha256)};}
+assert.equal(call(envelope('learning_head')).object_id,null);
+const lr=learnFields({kind:'COLLECTOR_DATA',schema:1,value:{private:'synthetic'}});
+assert.equal(call(envelope('learning_put',lr)).ok,true);
+assert.equal(call(envelope('learning_get',{object_id:lr.object_id})).payload_json,lr.payload_json);
+assert.equal(call(envelope('cache_get',{object_id:lr.object_id})).error,'REQUEST_INVALID');
+assert.equal(call(envelope('learning_get',{object_id:batch.object_id})).error,'REQUEST_INVALID');
+const ls=learnFields({kind:'COLLECTOR_STATE',schema:1,state:{cursor:1},previous_head:null});
+assert.equal(call(envelope('learning_commit',{...ls,base_head:null})).ok,true);
+assert.equal(call(envelope('learning_head')).object_id,ls.object_id);
+assert.equal(call(envelope('learning_commit',{...ls,base_head:null})).ok,true);
+const ls2=learnFields({kind:'COLLECTOR_STATE',schema:1,state:{cursor:2},previous_head:ls.object_id});
+assert.equal(call(envelope('learning_commit',{...ls2,base_head:null})).error,'LEARNING_HEAD_CONFLICT');
+assert.equal(call(envelope('learning_commit',{...ls2,base_head:ls.object_id})).ok,true);
+assert.deepEqual(call(envelope('learning_scan_refs')).refs,[scanFields.object_id]);
+assert.equal(call(envelope('learning_tickets')).tickets.length,0);
+console.log('Private learning namespaces, immutable reads, head CAS/idempotence and scanner inventory: PASS');

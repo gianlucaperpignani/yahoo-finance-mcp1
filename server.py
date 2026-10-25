@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.55 - SOLA LETTURA
+#  Versione 1.7.56 - SOLA LETTURA
 #  25/10/2026: cache prezzi persistente e preraccolta tecnica tramite /warm.
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
@@ -50,6 +50,8 @@ from runtime_manifest import build as build_runtime_manifest
 import cycle_scanner
 from price_cache_store import runtime as price_cache_runtime, MAX_RAM_BYTES, MAX_BLOB
 from cron_collector import runtime as cron_collector_runtime
+from learning_collector import Worker as LearningWorker
+from learning_sources import Sources as LearningSources
 from archive_runtime import runtime as archive_runtime
 from adaptive_method import validate_state
 from acquire_ecb_fx import acquire as acquire_ecb_history
@@ -79,7 +81,7 @@ def _ensure_archive_probe():
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.55"
+VERSION = "1.7.56"
 RUNTIME_MANIFEST = build_runtime_manifest()
 PRICE_CACHE_COMPAT = hashlib.sha256(json.dumps(dict(schema=1,maps=RUNTIME_MANIFEST["maps_sha256"],policy=RUNTIME_MANIFEST["policy_files"]),sort_keys=True).encode()).hexdigest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
@@ -2949,7 +2951,7 @@ def _price_cache_tick():
 
 
 def _cron_scan(markets):
-    return cycle_scanner.request(markets,"balanced",[],lambda m:scan_market(m),lambda m:scan_level_b_fusion(m,10))
+    return cycle_scanner.request(markets,"balanced",[],lambda m:scan_market(m),lambda m:scan_level_b_fusion(m,10),learning_states=learning_runtime.selection_states())
 
 
 def warm_batch(max_items=WARM_BATCH_MAX, budget=WARM_TIME_BUDGET, market=None):
@@ -3073,6 +3075,7 @@ def warm_api():
     try:
         _price_cache_tick()
         cron_collector_runtime.tick(_cron_scan)
+        learning_runtime.tick()
         return jsonify(warm_batch(request.args.get("max", WARM_BATCH_MAX), request.args.get("budget", WARM_TIME_BUDGET), request.args.get("market")))
     except Exception as exc:
         return _err(exc)
@@ -3306,6 +3309,7 @@ def get_server_status():
         "scan_archive_collector": cycle_scanner.status(),
         "price_cache_persistence": price_cache_runtime.status(),
         "cron_collector": cron_collector_runtime.status(),
+        "learning_collector": learning_runtime.status(),
         "adaptive_method_version": "1.1.0",
         "feedback_integration_version":"1.2.0",
         "opportunity_collector_version":"session-close-1.0.0",
@@ -3709,7 +3713,8 @@ for _tool in TOOLS:
 def _dispatch_full(name, a):
     if name == "scan_cycle_candidates":
         state = a.get("learning_state")
-        states=a.get('learning_states') or {}
+        internal_states=learning_runtime.selection_states()
+        states=internal_states if internal_states is not None else (a.get('learning_states') or {})
         for key,value in states.items():
             validate_state(value)
             if key!=value.get('scope',{}).get('category','')+'|'+value.get('scope',{}).get('method_id',''):raise ValueError('LEARNING_SCOPE_KEY_MISMATCH')
@@ -3831,6 +3836,7 @@ def mcp_rpc_server():
 # -----------------------------------------------------------------------------
 # Avvio
 # -----------------------------------------------------------------------------
+learning_runtime=LearningWorker(LearningSources(lambda ticker,**kwargs:_load_series(ticker,**kwargs),get_indicators,verify_instrument_identity))
 _start_warmer()
 
 if __name__ == "__main__":
