@@ -1,8 +1,8 @@
-/** Version 1.1.0 — private immutable archive + index in existing Registro.
+/** Version 1.2.0 — private immutable archive + index in existing Registro.
  * Script Properties: ARCHIVE_HMAC_SECRET, ARCHIVE_FOLDER_ID, REGISTRY_ID.
  * No broker APIs, orders, risk calculations or changes to existing records.
  */
-const ARCHIVE_VERSION = '1.1.0';
+const ARCHIVE_VERSION = '1.2.0';
 const ARCHIVE_LIMIT = 2000000;
 const ARCHIVE_KINDS = ['SCAN_ARCHIVE','COHORT_STORE','LEARNING_STATE','FEEDBACK',
   'RISK_BUNDLE','CHECKPOINT','RAW_MARKET_DATA','TECHNICAL_TEST'];
@@ -122,8 +122,64 @@ function priceCacheHandle(req,props) {
   archiveAssert(archiveSha(record.kind+'\n'+record.payload_sha256)===req.object_id,'OBJECT_HASH_INVALID');
   return {ok:true,object_id:req.object_id,payload_sha256:record.payload_sha256,payload_json:record.payload_json,file_id:file.getId()};
 }
+// Private learning state is a separate namespace from publicly downloadable scans.
+function learningHandle(req,props) {
+  const folder=DriveApp.getFolderById(props.getProperty('ARCHIVE_FOLDER_ID'));
+  const head=JSON.parse(props.getProperty('LEARNING_HEAD')||'null');
+  if(req.action==='learning_scan_refs') {
+    const claims=JSON.parse(props.getProperty('COLLECTOR_CLAIMS')||'{}');
+    return {ok:true,refs:Object.values(claims).filter(c=>c.finished).map(c=>c.object_id)};
+  }
+  if(req.action==='learning_tickets') {
+    const sheet=SpreadsheetApp.openById(props.getProperty('REGISTRY_ID')).getSheetByName('Registro');
+    const last=sheet.getLastRow();archiveAssert(last<=10000,'REGISTRY_CAPACITY_REVIEW_REQUIRED');
+    const found=[];sheet.getRange(4,24,Math.max(1,last-3),1).getValues().forEach(row=>{try{
+      const v=JSON.parse(row[0]);if(v.proposal && v.proposal_hash && v.execution_receipt)found.push(v);
+    }catch(ignore){}});
+    archiveAssert(found.length<=100,'PAYLOAD_TOO_LARGE');return {ok:true,tickets:found};
+  }
+  if(req.action==='learning_bootstrap') {
+    const files=folder.getFilesByName('etoro-learning-bootstrap-v1.json');
+    archiveAssert(files.hasNext(),'LEARNING_BOOTSTRAP_REQUIRED');const file=files.next();
+    archiveAssert(!files.hasNext(),'LEARNING_BOOTSTRAP_AMBIGUOUS');
+    const config=JSON.parse(file.getBlob().getDataAsString('UTF-8'));
+    archiveAssert(config.schema===1 && /^[0-9a-f]{64}$/.test(config.account_fingerprint),'REQUEST_INVALID');
+    const sheet=SpreadsheetApp.openById(props.getProperty('REGISTRY_ID')).getSheetByName('Registro');
+    const last=sheet.getLastRow();archiveAssert(last<=10000,'REGISTRY_CAPACITY_REVIEW_REQUIRED');
+    const values=sheet.getRange(4,24,Math.max(1,last-3),1).getValues();let parts=[],sha=null;
+    for(let i=values.length-1;i>=0;i--){try{const c=JSON.parse(values[i][0]);
+      if(c.kind==='SCHEDULED_COLLECTOR_INTEGRATION'){
+        if(!sha)sha=c.object_sha256;if(c.object_sha256===sha)parts.push(c);
+      }}catch(ignore){}}
+    archiveAssert(parts.length>0,'LEARNING_BOOTSTRAP_REQUIRED');
+    return {ok:true,config:config,chunks:parts};
+  }
+  if(req.action==='learning_head' && !head)return {ok:true,object_id:null};
+  if(req.action==='learning_head')req.object_id=head.object_id;
+  archiveAssert(/^[0-9a-f]{64}$/.test(req.object_id||''),'OBJECT_ID_INVALID');
+  let file=archiveFile(folder,req.object_id);
+  if(req.action==='learning_put' || req.action==='learning_commit') {
+    archiveAssert(typeof req.payload_json==='string' && Utilities.newBlob(req.payload_json).getBytes().length<=ARCHIVE_LIMIT,'PAYLOAD_TOO_LARGE');
+    archiveAssert(archiveSha(req.payload_json)===req.payload_sha256,'PAYLOAD_HASH_INVALID');
+    const kind=req.action==='learning_commit'?'COLLECTOR_STATE':'COLLECTOR_DATA';
+    archiveAssert(archiveSha(kind+'\n'+req.payload_sha256)===req.object_id,'OBJECT_HASH_INVALID');
+    const value=JSON.parse(req.payload_json);archiveAssert(value.kind===kind && value.schema===1,'REQUEST_INVALID');
+    if(kind==='COLLECTOR_STATE')archiveAssert((head?head.object_id:null)===(req.base_head||null)||(head&&head.object_id===req.object_id),'LEARNING_HEAD_CONFLICT');
+    const record={kind:kind,object_id:req.object_id,payload_sha256:req.payload_sha256,payload_json:req.payload_json};
+    if(file)archiveAssert(JSON.stringify(archiveLoad(file))===JSON.stringify(record),'IMMUTABLE_OBJECT_CONFLICT');
+    else file=folder.createFile(Utilities.gzip(Utilities.newBlob(JSON.stringify(record),'application/json'),'etoro-archive-'+req.object_id+'.json.gz'));
+    archiveAssert(archiveLoad(file).object_id===req.object_id,'DRIVE_READBACK_FAILED');
+    if(kind==='COLLECTOR_STATE')props.setProperty('LEARNING_HEAD',JSON.stringify({object_id:req.object_id,payload_sha256:req.payload_sha256}));
+  }
+  archiveAssert(!!file,'ARCHIVE_OBJECT_NOT_FOUND');const record=archiveLoad(file);
+  const allowed=req.action==='learning_get'?['COLLECTOR_DATA']:['COLLECTOR_STATE','COLLECTOR_DATA'];
+  archiveAssert(allowed.includes(record.kind),'REQUEST_INVALID');
+  archiveAssert(archiveSha(record.kind+'\n'+record.payload_sha256)===req.object_id,'OBJECT_HASH_INVALID');
+  return {ok:true,object_id:req.object_id,payload_sha256:record.payload_sha256,payload_json:record.payload_json,file_id:file.getId()};
+}
 function archiveHandle(req,props) {
   archiveAssert(req.protocol===1,'REQUEST_INVALID');
+  if(['learning_head','learning_put','learning_commit','learning_get','learning_bootstrap','learning_scan_refs','learning_tickets'].includes(req.action))return learningHandle(req,props);
   if(['cache_head','cache_get','cache_put','cache_commit','collector_claim','collector_finish'].includes(req.action))return priceCacheHandle(req,props);
   archiveAssert(['status','put','get'].includes(req.action),'REQUEST_INVALID');
   const folder=DriveApp.getFolderById(props.getProperty('ARCHIVE_FOLDER_ID'));
@@ -179,7 +235,7 @@ function doPost(e) {
       'REQUEST_REPLAY','REGISTRO_NOT_FOUND','REGISTRY_SCHEMA_MISMATCH','OBJECT_ID_INVALID','KIND_OR_RUN_INVALID',
       'PAYLOAD_INVALID','PAYLOAD_TOO_LARGE','PAYLOAD_HASH_INVALID','OBJECT_HASH_INVALID','IMMUTABLE_OBJECT_CONFLICT',
       'STORED_HASH_INVALID','DRIVE_READBACK_FAILED','REGISTRY_INDEX_CONFLICT','REGISTRY_WRITE_READBACK_FAILED',
-      'CACHE_HEAD_CONFLICT','DUPLICATE_REGISTRY_INDEX','DUPLICATE_ARCHIVE_OBJECT','REGISTRY_CAPACITY_REVIEW_REQUIRED','ARCHIVE_OBJECT_NOT_FOUND'];
+      'LEARNING_HEAD_CONFLICT','LEARNING_BOOTSTRAP_REQUIRED','LEARNING_BOOTSTRAP_AMBIGUOUS','CACHE_HEAD_CONFLICT','DUPLICATE_REGISTRY_INDEX','DUPLICATE_ARCHIVE_OBJECT','REGISTRY_CAPACITY_REVIEW_REQUIRED','ARCHIVE_OBJECT_NOT_FOUND'];
     return archiveReply({ok:false,error:allowed.includes(err.message)?err.message:'GATEWAY_FAILED'},nonce,secret);
   }finally {if(held){SpreadsheetApp.flush();lock.releaseLock();}}
 }

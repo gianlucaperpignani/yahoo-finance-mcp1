@@ -180,3 +180,55 @@ Il confronto live ha rilevato che il payload canonico del server contiene
 price_cache_store1.0.1 corregge esclusivamente tale validazione. I blob già
 salvati non cambiano e restano recuperabili. Un nuovo test usa direttamente
 _build_payload del server per verificare il contratto reale di serializzazione.
+
+## Collettore autonomo — gateway1.2.0, server1.7.56
+
+Stato: codice e test predisposti; nessun collaudo live del nuovo collettore
+è ancora dimostrato. La cache prezzi1.1.0 resta compatibile.
+
+Prima del merge/deploy del server:
+
+1. Sostituire tutto Codice.gs con ArchiveGateway.gs di questa revisione.
+2. Salvare; Gestisci deployment → matita → Nuova versione → Esegui deployment.
+3. Conservare URL e proprietà esistenti; nessuna nuova credenziale richiesta.
+
+Il file privato `etoro-learning-bootstrap-v1.json` nella cartella archivio
+lega l'identità del conto e l'hash della sorgente nel Registro originale.
+Non caricarlo in GitHub. Il gateway legge i chunk esistenti in Registro!X,
+il client valida parti, hash e formato prima di inizializzare lo stato.
+Se fonte, identità o permessi non coincidono, il collettore si ferma.
+
+Il cron esistente chiama `/warm`: ogni chiamata può avviare fino a quattro
+piccoli blocchi del collettore in background, al massimo una volta al minuto
+per processo. Non crea nuovi cron né cambia i cinque slot dell'agente.
+Le fonti eToro sono una allowlist di GET più le sole anteprime read-only
+di idoneità/costi. Non esistono chiamate di esecuzione, LLM o API a pagamento.
+
+Blocchi: verifica conto, import archivi scanner già salvati, metadati/identità
+in gruppi di quattro strumenti, ingresso shadow con quote/costi/FX/benchmark,
+chiusura alla seduta pianificata e pagine dello storico di200 operazioni.
+Mercato chiuso, prezzo/costo mancante e attesa della seduta restano PENDING
+con motivo, senza prezzi inventati né consumo dei tentativi per errori.
+
+Ogni blocco è preceduto da checkpoint firmato e riletto, con lease10minuti
+e massimo3 tentativi per errore/interruzione. Oggetti grezzi immutabili,
+ID stabili e compare-and-swap impediscono avanzamenti non verificati;
+se una scrittura fallisce, gli effetti parziali del blocco non avanzano.
+Ritornano in coda soltanto i blocchi incompleti. Gli esiti shadow e quelli
+reali restano separati; senza prova ticket/esecuzione non si attribuisce
+il profitto all'agente. Una copertura storica non certificata resta tale.
+
+Lo stato appreso per scope diventa utilizzabile soltanto dopo pubblicazione
+e readback nel Registro originale. Il motore mensile esistente mantiene
+i requisiti sui campioni; nessun cambiamento di rischio o autorizzazioni.
+Gli oggetti hanno il limite tecnico di2MB; raggiungerlo blocca l'avanzamento
+con errore esplicito, senza cancellare dati. L'archivio immutabile cresce:
+questa revisione non implementa la cancellazione dello storico.
+
+Collaudo dopo deploy: osservare `/status.learning_collector` fino a READY,
+checkpoint_verified=true e account_verified=true; verificare import del
+conteggio coorti e ledger preesistenti e lo stesso head dopo riavvio reale.
+READY può includere task BLOCKED: controllare pending_tasks, blocked_tasks
+e issues; non è certificazione di un ciclo operativo completo o di profitto.
+La prima entrata e uscita shadow reali richiedono mercati aperti e la seduta
+prevista. I test sintetici non costituiscono campioni d'apprendimento.

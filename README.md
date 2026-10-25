@@ -1,5 +1,5 @@
 # yahoo-finance-mcp1
-# Sprint 2 — release 1.7.50
+# Sprint 2 — release 1.7.56 (predisposta; attivazione da collaudare)
 
 Policy quantitative e parametri discovery sono distinti in `risk_policy.json`
 e `screening_config.json`. `release_contract.json` ne fissa gli SHA e il pin
@@ -49,3 +49,7 @@ learning_sessions.py vincola il piano a calendari/chiusure effettivi; un prezzo
 successivo non chiude la vecchia seduta. mandate_targets.py legge soltanto gli
 obiettivi iniziali dal master autenticato. learning_costs.py normalizza preview
 read-only senza inventare costi di uscita. Il campione reale resta da maturare.
+
+Release1.7.56 collega il collettore read-only al cron `/warm` esistente.
+Non attivare prima di pubblicare ArchiveGateway1.2.0. Istruzioni e limiti
+sono in `apps_script/SETUP.md`, sezione Collettore autonomo.
