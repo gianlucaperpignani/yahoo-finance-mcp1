@@ -1,6 +1,7 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.53 - SOLA LETTURA
+#  Versione 1.7.54 - SOLA LETTURA
+#  25/10/2026: cache prezzi persistente e preraccolta tecnica tramite /warm.
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
 #  18/10/2026: lacune interne isolate, indicatori su coda consecutiva;
@@ -47,6 +48,8 @@ import etoro_history
 from policy_contract import T
 from runtime_manifest import build as build_runtime_manifest
 import cycle_scanner
+from price_cache_store import runtime as price_cache_runtime, MAX_RAM_BYTES, MAX_BLOB
+from cron_collector import runtime as cron_collector_runtime
 from archive_runtime import runtime as archive_runtime
 from adaptive_method import validate_state
 from acquire_ecb_fx import acquire as acquire_ecb_history
@@ -70,13 +73,15 @@ app = Flask(__name__)
 def _ensure_archive_probe():
     # Start inside the serving PID, after any Gunicorn fork; never block HTTP.
     archive_runtime.start()
+    _price_cache_tick()
 
 
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.53"
+VERSION = "1.7.54"
 RUNTIME_MANIFEST = build_runtime_manifest()
+PRICE_CACHE_COMPAT = hashlib.sha256(json.dumps(dict(schema=1,maps=RUNTIME_MANIFEST["maps_sha256"],policy=RUNTIME_MANIFEST["policy_files"]),sort_keys=True).encode()).hexdigest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
 DEFAULT_PERIOD = "2y"
 HTTP_TIMEOUT = 15
@@ -1516,10 +1521,18 @@ def _cache_put(key, entry):
         stored["blob"] = blob
         stored["blob_bytes"] = len(blob)
     with CACHE_LOCK:
-        for k in [k for k, v in CACHE.items() if now - v["ts"] >= STALE_MAX_AGE]:
+        def evictable(k,v):
+            return not (k.startswith("s:") and len(k.split(":"))==6 and k.split(":")[3]=="1d") or price_cache_runtime.is_verified(k,v)
+        for k in [k for k,v in CACHE.items() if now-v["ts"]>=STALE_MAX_AGE and evictable(k,v)]:
             del CACHE[k]
-        while len(CACHE) >= CACHE_MAX_ITEMS:
-            del CACHE[min(CACHE, key=lambda k: CACHE[k]["ts"])]
+        needed=stored.get("blob_bytes",0)
+        if key.startswith("s:") and key.split(":")[3]=="1d" and needed>MAX_BLOB:
+            raise ValueError("PRICE_CACHE_ENTRY_TOO_LARGE")
+        while ((key not in CACHE and len(CACHE)>=CACHE_MAX_ITEMS) or
+               sum(v.get("blob_bytes",0) for k,v in CACHE.items() if k!=key)+needed>MAX_RAM_BYTES):
+            choices=[k for k,v in CACHE.items() if k!=key and evictable(k,v)]
+            if not choices:raise ValueError("PRICE_CACHE_PENDING_CAPACITY: attendere salvataggio verificato")
+            del CACHE[min(choices,key=lambda k:CACHE[k]["ts"])]
         CACHE[key] = stored
 
 
@@ -2931,6 +2944,14 @@ def _memory_ok_for_warm():
     return bool(rss is None or rss < MEMORY_SOFT_LIMIT_MB), rss
 
 
+def _price_cache_tick():
+    price_cache_runtime.tick(CACHE,CACHE_LOCK,PRICE_CACHE_COMPAT,CACHE_MAX_ITEMS)
+
+
+def _cron_scan(markets):
+    return cycle_scanner.request(markets,"balanced",[],lambda m:scan_market(m),lambda m:scan_level_b_fusion(m,10))
+
+
 def warm_batch(max_items=WARM_BATCH_MAX, budget=WARM_TIME_BUDGET, market=None):
     if not _WARM_RUN_LOCK.acquire(blocking=False):
         return {"server_version": VERSION, "status": "busy",
@@ -3050,6 +3071,8 @@ def warm_batch(max_items=WARM_BATCH_MAX, budget=WARM_TIME_BUDGET, market=None):
 @app.route("/warm", methods=["GET"])
 def warm_api():
     try:
+        _price_cache_tick()
+        cron_collector_runtime.tick(_cron_scan)
         return jsonify(warm_batch(request.args.get("max", WARM_BATCH_MAX), request.args.get("budget", WARM_TIME_BUDGET), request.args.get("market")))
     except Exception as exc:
         return _err(exc)
@@ -3059,6 +3082,7 @@ def _warmer_loop():
     time.sleep(20)
     while True:
         try:
+            _price_cache_tick()
             warm_batch()
         except Exception as exc:
             _WS["last_error"] = f"ciclo: {str(exc)[:120]}"
@@ -3280,6 +3304,8 @@ def get_server_status():
         "runtime_manifest": RUNTIME_MANIFEST,
         "persistent_archive": archive_runtime.status(),
         "scan_archive_collector": cycle_scanner.status(),
+        "price_cache_persistence": price_cache_runtime.status(),
+        "cron_collector": cron_collector_runtime.status(),
         "adaptive_method_version": "1.1.0",
         "feedback_integration_version":"1.2.0",
         "opportunity_collector_version":"session-close-1.0.0",

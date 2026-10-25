@@ -1,4 +1,4 @@
-"""1.2.1: actual deployed artifacts; hashes are identifiers, not backups."""
+"""1.3.0: actual deployed artifacts; hashes are identifiers, not backups."""
 import importlib.metadata
 import json
 import os
@@ -6,7 +6,7 @@ import platform
 from pathlib import Path
 from policy_contract import sha_file
 
-CODE = ("learning_acquisition.py", "scan_archive_store.py", "archive_client.py", "archive_runtime.py", "server.py", "level_b.py", "universe.py", "etoro_history.py", "etoro_dual_source.py",
+CODE = ("price_cache_store.py", "cron_collector.py", "learning_acquisition.py", "scan_archive_store.py", "archive_client.py", "archive_runtime.py", "server.py", "level_b.py", "universe.py", "etoro_history.py", "etoro_dual_source.py",
         "etoro_corporate_actions.py", "prepare_ecb_fx.py", "acquire_ecb_fx.py",
         "prepare_etoro_history.py", "policy_contract.py", "runtime_manifest.py",
         "adaptive_method.py", "candidate_selection.py", "cycle_scanner.py", "outcome_ledger.py", "event_evidence.py", "feedback_cycle.py", "opportunity_cohorts.py", "execution_attribution.py", "candidate_enrichment.py", "learning_acquisition.py", "formula_contract.py", "learning_sessions.py", "mandate_targets.py", "learning_costs.py")

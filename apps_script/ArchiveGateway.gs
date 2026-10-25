@@ -1,8 +1,8 @@
-/** Version 1.0.0 — private immutable archive + index in existing Registro.
+/** Version 1.1.0 — private immutable archive + index in existing Registro.
  * Script Properties: ARCHIVE_HMAC_SECRET, ARCHIVE_FOLDER_ID, REGISTRY_ID.
  * No broker APIs, orders, risk calculations or changes to existing records.
  */
-const ARCHIVE_VERSION = '1.0.0';
+const ARCHIVE_VERSION = '1.1.0';
 const ARCHIVE_LIMIT = 2000000;
 const ARCHIVE_KINDS = ['SCAN_ARCHIVE','COHORT_STORE','LEARNING_STATE','FEEDBACK',
   'RISK_BUNDLE','CHECKPOINT','RAW_MARKET_DATA','TECHNICAL_TEST'];
@@ -67,8 +67,65 @@ function archiveIndex(sheet,record,file) {
   archiveAssert(sheet.getRange(indexRow,24).getValue()===row[23],'REGISTRY_WRITE_READBACK_FAILED');
   return 'Registro!A'+indexRow+':Z'+indexRow;
 }
+// Price-cache objects stay in the technical Drive archive, not one Registry row
+// per cron tick. Head moves only after verified bytes and compare-and-swap.
+function priceCacheHandle(req,props) {
+  const folder=DriveApp.getFolderById(props.getProperty('ARCHIVE_FOLDER_ID'));
+  const head=JSON.parse(props.getProperty('PRICE_CACHE_HEAD')||'null');
+  if(req.action==='cache_head')return {ok:true,head:head};
+  if(req.action==='collector_claim') {
+    archiveAssert(/^\d{4}-\d{2}-\d{2}\|(09:20|16:00)$/.test(req.slot_key),'REQUEST_INVALID');
+    const claims=JSON.parse(props.getProperty('COLLECTOR_CLAIMS')||'{}');
+    const old=claims[req.slot_key],now=Math.floor(Date.now()/1000);
+    if(old && (old.finished || now-old.at<1200))return {ok:true,claimed:false,previous:old};
+    Object.keys(claims).sort().slice(0,Math.max(0,Object.keys(claims).length-13)).forEach(k=>delete claims[k]);
+    claims[req.slot_key]={at:now,finished:false,claim_token:req.nonce};props.setProperty('COLLECTOR_CLAIMS',JSON.stringify(claims));
+    return {ok:true,claimed:true,claim_token:req.nonce};
+  }
+  if(req.action==='collector_finish') {
+    archiveAssert(/^\d{4}-\d{2}-\d{2}\|(09:20|16:00)$/.test(req.slot_key),'REQUEST_INVALID');
+    const claims=JSON.parse(props.getProperty('COLLECTOR_CLAIMS')||'{}');
+    archiveAssert(!!claims[req.slot_key] && claims[req.slot_key].claim_token===req.claim_token,'REQUEST_INVALID');
+    archiveAssert(/^[0-9a-f]{64}$/.test(req.object_id),'OBJECT_ID_INVALID');
+    const file=archiveFile(folder,req.object_id);archiveAssert(!!file,'ARCHIVE_OBJECT_NOT_FOUND');
+    archiveAssert(archiveLoad(file).kind==='SCAN_ARCHIVE','REQUEST_INVALID');
+    claims[req.slot_key]={at:claims[req.slot_key].at,finished:true,object_id:req.object_id};
+    props.setProperty('COLLECTOR_CLAIMS',JSON.stringify(claims));return {ok:true,finished:true};
+  }
+  archiveAssert(/^[0-9a-f]{64}$/.test(req.object_id||''),'OBJECT_ID_INVALID');
+  let file=archiveFile(folder,req.object_id);
+  if(req.action==='cache_put' || req.action==='cache_commit') {
+    archiveAssert(typeof req.payload_json==='string' && Utilities.newBlob(req.payload_json).getBytes().length<=ARCHIVE_LIMIT,'PAYLOAD_TOO_LARGE');
+    archiveAssert(archiveSha(req.payload_json)===req.payload_sha256,'PAYLOAD_HASH_INVALID');
+    const kind=req.action==='cache_commit'?'PRICE_CACHE_MANIFEST':'PRICE_CACHE_BATCH';
+    archiveAssert(archiveSha(kind+'\n'+req.payload_sha256)===req.object_id,'OBJECT_HASH_INVALID');
+    const payload=JSON.parse(req.payload_json);
+    archiveAssert(payload.kind===kind && payload.schema===1,'REQUEST_INVALID');
+    if(kind==='PRICE_CACHE_BATCH')archiveAssert(Array.isArray(payload.entries) && payload.entries.length<=80,'REQUEST_INVALID');
+    if(kind==='PRICE_CACHE_MANIFEST') {
+      archiveAssert(payload.buckets && Object.keys(payload.buckets).length<=32,'REQUEST_INVALID');
+      Object.values(payload.buckets).forEach(id=>{
+        archiveAssert(/^[0-9a-f]{64}$/.test(id),'OBJECT_ID_INVALID');
+        const part=archiveFile(folder,id);archiveAssert(!!part && archiveLoad(part).kind==='PRICE_CACHE_BATCH','ARCHIVE_OBJECT_NOT_FOUND');
+      });
+      archiveAssert((head?head.object_id:null)===(req.base_head||null) || (head && head.object_id===req.object_id),'CACHE_HEAD_CONFLICT');
+    }
+    const record={kind:kind,object_id:req.object_id,payload_sha256:req.payload_sha256,payload_json:req.payload_json};
+    if(file)archiveAssert(JSON.stringify(archiveLoad(file))===JSON.stringify(record),'IMMUTABLE_OBJECT_CONFLICT');
+    else file=folder.createFile(Utilities.gzip(Utilities.newBlob(JSON.stringify(record),'application/json'),'etoro-archive-'+req.object_id+'.json.gz'));
+    const check=archiveLoad(file);archiveAssert(check.object_id===req.object_id,'DRIVE_READBACK_FAILED');
+    if(kind==='PRICE_CACHE_MANIFEST')props.setProperty('PRICE_CACHE_HEAD',JSON.stringify({object_id:req.object_id,payload_sha256:req.payload_sha256}));
+  }
+  archiveAssert(!!file,'ARCHIVE_OBJECT_NOT_FOUND');
+  const record=archiveLoad(file);
+  archiveAssert(['PRICE_CACHE_MANIFEST','PRICE_CACHE_BATCH'].includes(record.kind),'REQUEST_INVALID');
+  archiveAssert(archiveSha(record.kind+'\n'+record.payload_sha256)===req.object_id,'OBJECT_HASH_INVALID');
+  return {ok:true,object_id:req.object_id,payload_sha256:record.payload_sha256,payload_json:record.payload_json,file_id:file.getId()};
+}
 function archiveHandle(req,props) {
-  archiveAssert(req.protocol===1 && ['status','put','get'].includes(req.action),'REQUEST_INVALID');
+  archiveAssert(req.protocol===1,'REQUEST_INVALID');
+  if(['cache_head','cache_get','cache_put','cache_commit','collector_claim','collector_finish'].includes(req.action))return priceCacheHandle(req,props);
+  archiveAssert(['status','put','get'].includes(req.action),'REQUEST_INVALID');
   const folder=DriveApp.getFolderById(props.getProperty('ARCHIVE_FOLDER_ID'));
   const book=SpreadsheetApp.openById(props.getProperty('REGISTRY_ID'));
   const sheet=book.getSheetByName('Registro');archiveAssert(!!sheet,'REGISTRO_NOT_FOUND');
@@ -122,7 +179,7 @@ function doPost(e) {
       'REQUEST_REPLAY','REGISTRO_NOT_FOUND','REGISTRY_SCHEMA_MISMATCH','OBJECT_ID_INVALID','KIND_OR_RUN_INVALID',
       'PAYLOAD_INVALID','PAYLOAD_TOO_LARGE','PAYLOAD_HASH_INVALID','OBJECT_HASH_INVALID','IMMUTABLE_OBJECT_CONFLICT',
       'STORED_HASH_INVALID','DRIVE_READBACK_FAILED','REGISTRY_INDEX_CONFLICT','REGISTRY_WRITE_READBACK_FAILED',
-      'DUPLICATE_REGISTRY_INDEX','DUPLICATE_ARCHIVE_OBJECT','REGISTRY_CAPACITY_REVIEW_REQUIRED','ARCHIVE_OBJECT_NOT_FOUND'];
+      'CACHE_HEAD_CONFLICT','DUPLICATE_REGISTRY_INDEX','DUPLICATE_ARCHIVE_OBJECT','REGISTRY_CAPACITY_REVIEW_REQUIRED','ARCHIVE_OBJECT_NOT_FOUND'];
     return archiveReply({ok:false,error:allowed.includes(err.message)?err.message:'GATEWAY_FAILED'},nonce,secret);
   }finally {if(held){SpreadsheetApp.flush();lock.releaseLock();}}
 }

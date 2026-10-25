@@ -16,7 +16,7 @@ const context={console,Date,JSON,Array,Object,String,Number,Error,Math,
  computeDigest:(a,t)=>bytes(crypto.createHash('sha256').update(t).digest()),
  computeHmacSha256Signature:(t,k)=>bytes(crypto.createHmac('sha256',k).update(t).digest()),
  gzip:(b,n)=>({data:zlib.gzipSync(buffer(b.getBytes())),name:n}),ungzip:b=>blob(zlib.gunzipSync(buffer(b.getBytes())))},
- PropertiesService:{getScriptProperties:()=>({getProperty:n=>properties[n]})},
+ PropertiesService:{getScriptProperties:()=>({getProperty:n=>properties[n],setProperty:(n,v)=>{properties[n]=v;}})},
  ContentService:{MimeType:{JSON:'json'},createTextOutput:t=>({text:t,setMimeType(){return this;}})},
  LockService:{getScriptLock:()=>({waitLock:()=>{},releaseLock:()=>{}})},
  CacheService:{getScriptCache:()=>({get:k=>cache.get(k),put:(k,v)=>cache.set(k,v)})},
@@ -45,3 +45,25 @@ rows[3][23]=JSON.stringify({...JSON.parse(rows[3][23]),payload_sha256:'0'.repeat
 assert.equal(call(envelope('get',{object_id:fields.object_id})).error,'REGISTRY_INDEX_CONFLICT');
 assert.equal(rows[2][0],'ID');assert.equal(rows[2][23],'Note / post-mortem');
 console.log('ArchiveGateway synthetic integration: PASS (put/get, idempotence, replay, tamper, crash recovery, index conflict)');
+
+// Dedicated price cache: no per-batch Registry writes; CAS and idempotent commit.
+const beforeRows=rows.length;
+function cacheFields(value){const payload_json=JSON.stringify(value),payload_sha256=sha(payload_json);return {payload_json,payload_sha256,object_id:sha(value.kind+'\n'+payload_sha256)};}
+let batch=cacheFields({kind:'PRICE_CACHE_BATCH',schema:1,bucket:'0',entries:[]});
+assert.equal(call(envelope('cache_put',batch)).ok,true);
+assert.equal(call(envelope('cache_get',{object_id:batch.object_id})).payload_json,batch.payload_json);
+assert.equal(call(envelope('cache_get',{object_id:fields.object_id})).error,'REQUEST_INVALID');
+let mf=cacheFields({kind:'PRICE_CACHE_MANIFEST',schema:1,buckets:{'0':batch.object_id}});
+assert.equal(call(envelope('cache_commit',{...mf,base_head:null})).ok,true);
+assert.equal(call(envelope('cache_head')).head.object_id,mf.object_id);
+assert.equal(call(envelope('cache_commit',{...mf,base_head:null})).ok,true);
+let mf2=cacheFields({kind:'PRICE_CACHE_MANIFEST',schema:1,buckets:{}});
+assert.equal(call(envelope('cache_commit',{...mf2,base_head:null})).error,'CACHE_HEAD_CONFLICT');
+assert.equal(rows.length,beforeRows);
+const scanFields={...fields,kind:'SCAN_ARCHIVE',object_id:sha('SCAN_ARCHIVE'+'\n'+run+'\n'+fields.payload_sha256)};assert.equal(call(envelope('put',scanFields)).ok,true);
+const claim=call(envelope('collector_claim',{slot_key:'2026-10-26|09:20'}));assert.equal(claim.claimed,true);
+assert.equal(call(envelope('collector_claim',{slot_key:'2026-10-26|09:20'})).claimed,false);
+assert.equal(call(envelope('collector_finish',{slot_key:'2026-10-26|09:20',claim_token:'wrong',object_id:fields.object_id})).error,'REQUEST_INVALID');
+assert.equal(call(envelope('collector_finish',{slot_key:'2026-10-26|09:20',claim_token:claim.claim_token,object_id:scanFields.object_id})).finished,true);
+assert.equal(call(envelope('collector_claim',{slot_key:'2026-10-26|09:20'})).claimed,false);
+console.log('Price cache CAS, idempotence, private namespace, no Registry flood, collector dedup: PASS');
