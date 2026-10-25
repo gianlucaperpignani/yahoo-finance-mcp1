@@ -164,3 +164,13 @@ serie verificate, riavviare realmente Render e verificare restored_entries e
 la data di acquisizione preservata. Oggi25/10/2026 è domenica: la prima prova
 dello slot automatico è lunedì26/10 alle09:20 Europe/Rome; un test sintetico
 non va presentato come quel ciclo. Nessuna modifica al mandato r8 o al rischio.
+
+### Prova live iniziale del25/10/2026
+
+Gateway1.1.0 pubblicato dal proprietario; server1.7.54 distribuito con commit
+45fe16522b99dfbc81ea903b713cdf476661762b. Il controllo live ha verificato
+il salvataggio e la rilettura firmata delle prime2 serie reali. Questo aggiornamento
+documentale avvia il redeploy controllato per verificare il recupero dal manifest:
+non modifica il codice e non attesta da solo la riuscita del riavvio. La prova
+va completata confrontando restored_entries, barre e timestamp della fonte
+prima/dopo. La raccolta dello slot feriale resta da osservare nel giorno previsto.
