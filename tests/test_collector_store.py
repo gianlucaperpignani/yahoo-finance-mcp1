@@ -36,7 +36,9 @@ class StoreTests(unittest.TestCase):
         client=Client();s=Store(client);head=s.save({'task':1},None);client.bad_read=True
         with self.assertRaisesRegex(ArchiveError,'HASH'):s.load()
     def test_registry_seed_must_match_private_approved_bootstrap_hash(self):
-        raw=canonical(dict(kind='SCHEDULED_COLLECTOR_INTEGRATION',feedback=dict(input={},output={}))).encode();sha=hashlib.sha256(raw).hexdigest()
+        # Actual original Registro wrapper; the chunk kind has no version suffix,
+        # but the compressed artifact itself is explicitly versioned.
+        raw=canonical(dict(kind='SCHEDULED_COLLECTOR_INTEGRATION_1.0.0',feedback=dict(input={},output={}))).encode();sha=hashlib.sha256(raw).hexdigest()
         config=dict(schema=1,account_fingerprint='a'*64,registry_seed_sha256=sha)
         chunk=dict(part=1,parts=1,object_sha256=sha,data=base64.b64encode(zlib.compress(raw)).decode())
         client=Client();client.bootstrap_payload=dict(config=config,chunks=[chunk])

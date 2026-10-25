@@ -69,6 +69,9 @@ class CheckpointTests(unittest.TestCase):
         self.assertTrue(row['exit_session_verified']);self.assertTrue(all(c['costs_included'] for c in row['candidates']))
         self.wake();self.assertEqual(self.sources.exits,1);self.assertEqual(len(self.store.value['cohorts']),1)
         self.assertTrue(new.status()['checkpoint_verified'])
+        self.assertTrue(new.status()['restored_checkpoint'])
+        self.assertEqual(new.status()['ledger_entries'],0)
+        self.assertEqual(new.status()['source_registry_sha'],'a'*64)
     def test_write_failure_before_read_never_advances_work(self):
         self.store.fail_save=True;w=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0]);w._run()
         self.assertEqual(w.status()['state'],'ERROR');self.assertEqual(self.sources.reads,0);self.assertIsNone(self.store.value)

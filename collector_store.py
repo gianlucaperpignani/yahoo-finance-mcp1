@@ -63,7 +63,7 @@ class Store:
         if config.get('registry_seed_sha256')!=ordered[0]['object_sha256']:
             raise ArchiveError('COLLECTOR_BOOTSTRAP_NOT_APPROVED_SOURCE')
         artifact=json.loads(raw)
-        if artifact.get('kind')!='SCHEDULED_COLLECTOR_INTEGRATION':raise ArchiveError('COLLECTOR_BOOTSTRAP_KIND_INVALID')
+        if artifact.get('kind')!='SCHEDULED_COLLECTOR_INTEGRATION_1.0.0':raise ArchiveError('COLLECTOR_BOOTSTRAP_KIND_INVALID')
         return artifact['feedback'],config,ordered[0]['object_sha256']
     def tickets(self):return self.client._call('learning_tickets').get('tickets',[])
     def scan_refs(self):return self.client._call('learning_scan_refs').get('refs',[])
