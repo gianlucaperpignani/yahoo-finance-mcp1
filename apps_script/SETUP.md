@@ -81,3 +81,30 @@ esterno costituisce la prova controllata di riavvio; il server non la dichiara
 automaticamente (`controlled_restart_verified=false`). Un altro worker può
 infatti recuperare l'oggetto senza che il servizio sia stato riavviato.
 La raccolta finanziaria automatica resta una fase successiva.
+
+## Collettore scanner 1.7.52
+
+I job `scan_cycle_candidates` archiviano automaticamente gli artefatti numerici
+completati, prima di rispondere COMPLETE. La shortlist globale resta al massimo
+10 titoli; tutti gli altri dati rimangono nel Python/Drive. `scan_complete`
+continua a descrivere la copertura, non il salvataggio o la validità di ticket.
+Controllare separatamente `opportunity_archive.persistence.durable_verified`.
+
+Il riferimento `opportunity_archive.path` include un object_id quando la
+persistenza è verificata; conservare quel riferimento nel checkpoint del
+collettore. Permette di recuperare lo stesso artefatto dopo perdita della RAM
+o riavvio. Il normale downloader della skill è compatibile senza modifiche.
+La rotta verifica namespace SCAN_ARCHIVE, job ID e hash prima di restituire
+dati; non consente il download di archivi di conto o altri tipi privati.
+
+Un errore di scrittura mantiene il risultato in RAM oltre il TTL. Un polling
+successivo ritenta dopo almeno60 secondi senza ripetere Yahoo/Fusion. Il limite
+è4 job trattenuti: a capacità raggiunta i nuovi job rispondono BUSY. Solo job
+scaduti verificati vengono rimossi in modalità persistente. Nessun dato non
+archiviato viene eliminato per fare spazio. Il TTL di15 minuti resta il limite
+di riuso della scansione, non la durata dei file immutabili in Drive.
+
+`/status.scan_archive_collector` espone conteggi e versione senza payload o
+segreti. Questa fase non persiste lo storico prezzi, non recupera un job
+interrotto prima della sua conclusione e non avvia scansioni autonome: restano
+la pianificazione e il cron esistenti. Non vengono cambiate soglie o Mandato.
