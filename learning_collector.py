@@ -190,9 +190,10 @@ class Worker:
             counts={}
             for row in state['cohorts'].values():counts[row['state']]=counts.get(row['state'],0)+1
             pending=[t for t in state['tasks'].values() if t['state']!='DONE']
+            ledger_count=len(store.get(state['ledger_ref']))
             with self.lock:self.info.update(state='READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=sum(t['state']=='BLOCKED' for t in pending),
                 issues=sorted(set(t.get('error') for t in pending if t.get('error')))[:8],last_checked_at=self.clock(),account_verified=state['account_verified'],
-                restored_checkpoint=restored,checkpoint_object_id=head,ledger_entries=len(store.get(state['ledger_ref'])),
+                restored_checkpoint=restored,checkpoint_object_id=head,ledger_entries=ledger_count,
                 source_registry_sha=state['source_registry_sha'])
         except Conflict:
             with self.lock:self.info.update(state='WAIT_OTHER_WORKER',checkpoint_verified=False)
