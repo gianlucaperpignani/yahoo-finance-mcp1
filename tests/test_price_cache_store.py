@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 NOW=1792922400
 
 def entry(ticker='SYNTHETIC',ts=NOW):
-    payload=dict(ticker=ticker,interval='1d',coverage_end='2026-10-23',bars=[dict(date='2026-10-23',close=123.45)])
+    payload=dict(ticker=ticker,interval='1d',coverage_end='2026-10-23',history=[dict(date='2026-10-23',close=123.45)])
     blob=zlib.compress(json.dumps(payload).encode())
     return dict(ts=ts,expected='2026-10-23',coverage_end='2026-10-23',after_close=True,blob=blob,blob_bytes=len(blob))
 
@@ -101,7 +101,7 @@ class ServerCacheTests(unittest.TestCase):
         saved=server.CACHE.copy()
         try:
             server.CACHE.clear()
-            payload=dict(ticker='SYNTHETIC',interval='1d',coverage_end='2026-10-23',bars=[])
+            payload=dict(ticker='SYNTHETIC',interval='1d',coverage_end='2026-10-23',history=[])
             with patch.object(server,'CACHE_MAX_ITEMS',1),patch.object(server.price_cache_runtime,'is_verified',return_value=False):
                 server._cache_put('s:SYNTHETIC:2y:1d:None:None',dict(ts=time.time(),expected='2026-10-23',after_close=True,data=payload))
                 with self.assertRaisesRegex(ValueError,'PENDING_CAPACITY'):
@@ -116,3 +116,14 @@ class ServerCacheTests(unittest.TestCase):
         old=entry();p=server._from_cache(old,'2026-10-26')
         self.assertFalse(p['data_current']);self.assertEqual(p['last_completed_session_expected'],'2026-10-26')
         self.assertEqual(old['ts'],NOW)
+
+    def test_actual_server_payload_can_be_saved_and_restored(self):
+        import server
+        raw=dict(tz='UTC',currency='USD',name='synthetic adapter contract',duplicates_removed=0,
+                 adj_method='synthetic adjusted test',dropped=[],actions=[],
+                 bars=[dict(date='2026-10-23',open=100,high=101,low=99,close=100,volume=1000)])
+        payload=server._build_payload('SYNTHETIC','2y','1d',None,None,None,None,None,raw)
+        blob=zlib.compress(json.dumps(payload).encode())
+        item=dict(ts=NOW,coverage_end=payload['coverage_end'],blob=blob,blob_bytes=len(blob))
+        decoded=decode_entry(encode_entry('s:SYNTHETIC:2y:1d:None:None',item),NOW)
+        self.assertEqual(json.loads(zlib.decompress(decoded[1]['blob']))['history'],payload['history'])
