@@ -1,4 +1,4 @@
-"""1.0.0: authenticated incremental compressed price cache, bounded background IO.
+"""1.0.1: authenticated incremental compressed price cache, bounded background IO.
 
 Preserves acquisition timestamps; financial freshness is rechecked by server.
 No Registry row per price batch, no broker access, no synthetic prices.
@@ -12,7 +12,7 @@ import time
 import zlib
 from archive_client import ArchiveClient, ArchiveError, canonical, digest, MAX_PAYLOAD_BYTES, configuration_status
 
-VERSION='1.0.0'
+VERSION='1.0.1'
 BUCKETS=32
 MAX_AGE=4*86400
 MAX_BLOB=512000
@@ -66,7 +66,7 @@ def decode_entry(row,now):
     decoder=zlib.decompressobj();raw=decoder.decompress(blob,4_000_001)
     if len(raw)>4_000_000 or not decoder.eof or decoder.unused_data:raise ArchiveError('PRICE_CACHE_BLOB_INVALID')
     payload=json.loads(raw)
-    if not isinstance(payload,dict) or payload.get('interval')!='1d' or not isinstance(payload.get('bars'),list):
+    if not isinstance(payload,dict) or payload.get('interval')!='1d' or not isinstance(payload.get('history'),list):
         raise ArchiveError('PRICE_CACHE_PAYLOAD_INVALID')
     # Use stored metadata only if it matches the actual payload bytes.
     if entry.get('coverage_end')!=payload.get('coverage_end') or key.split(':')[1]!=payload.get('ticker'):

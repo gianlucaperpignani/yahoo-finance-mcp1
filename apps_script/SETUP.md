@@ -174,3 +174,9 @@ documentale avvia il redeploy controllato per verificare il recupero dal manifes
 non modifica il codice e non attesta da solo la riuscita del riavvio. La prova
 va completata confrontando restored_entries, barre e timestamp della fonte
 prima/dopo. La raccolta dello slot feriale resta da osservare nel giorno previsto.
+
+Il confronto live ha rilevato che il payload canonico del server contiene
+`history`, mentre l'adattatore iniziale cercava `bars`. Il server1.7.55 /
+price_cache_store1.0.1 corregge esclusivamente tale validazione. I blob già
+salvati non cambiano e restano recuperabili. Un nuovo test usa direttamente
+_build_payload del server per verificare il contratto reale di serializzazione.

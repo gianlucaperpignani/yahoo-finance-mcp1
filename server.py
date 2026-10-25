@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.54 - SOLA LETTURA
+#  Versione 1.7.55 - SOLA LETTURA
 #  25/10/2026: cache prezzi persistente e preraccolta tecnica tramite /warm.
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
@@ -79,7 +79,7 @@ def _ensure_archive_probe():
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.54"
+VERSION = "1.7.55"
 RUNTIME_MANIFEST = build_runtime_manifest()
 PRICE_CACHE_COMPAT = hashlib.sha256(json.dumps(dict(schema=1,maps=RUNTIME_MANIFEST["maps_sha256"],policy=RUNTIME_MANIFEST["policy_files"]),sort_keys=True).encode()).hexdigest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
