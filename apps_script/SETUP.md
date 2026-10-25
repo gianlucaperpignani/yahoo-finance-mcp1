@@ -64,3 +64,20 @@ Test locali senza Google o dati reali:
 python -m unittest discover -s tests -p test_archive_client.py -v
 node tests/test_archive_gateway.cjs
 ```
+
+## Integrazione server 1.7.51
+
+Al primo accesso HTTP, un thread nel processo servente verifica automaticamente
+status, put e readback firmati. `/status` espone `persistent_archive` senza
+segreti, URL, contenuti privati o ID Drive. Le richieste HTTP non aspettano il
+collaudo. Una sola esecuzione per PID; nessun retry automatico dopo un errore.
+Un unico oggetto TECHNICAL_TEST immutabile viene riusato tra avvii, senza
+aggiungere una riga a ogni richiesta. Nessuna cache viene eliminata.
+
+Attendere `state=PASS` e `durable_storage_verified=true`. Annotare
+`started_at_utc`, riavviare realmente Render e richiamare `/status`: la data
+di avvio deve cambiare e `previous_object_recovered=true`. Questo confronto
+esterno costituisce la prova controllata di riavvio; il server non la dichiara
+automaticamente (`controlled_restart_verified=false`). Un altro worker può
+infatti recuperare l'oggetto senza che il servizio sia stato riavviato.
+La raccolta finanziaria automatica resta una fase successiva.
