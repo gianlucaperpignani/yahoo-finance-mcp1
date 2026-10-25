@@ -108,3 +108,59 @@ di riuso della scansione, non la durata dei file immutabili in Drive.
 segreti. Questa fase non persiste lo storico prezzi, non recupera un job
 interrotto prima della sua conclusione e non avvia scansioni autonome: restano
 la pianificazione e il cron esistenti. Non vengono cambiate soglie o Mandato.
+
+## Cache prezzi e cron — server1.7.54 / gateway1.1.0
+
+Prima del deploy aggiornare il codice Apps Script ad ArchiveGateway.gs1.1.0 e
+pubblicare una nuova versione della distribuzione esistente. URL, chiave e
+proprietà restano identici. Il nuovo protocollo conserva gli oggetti immutabili
+preesistenti e aggiunge operazioni cache firmate e prenotazione dei due slot
+tecnici. Google owner deployment resta un passo manuale, non effettuabile dal
+connettore Drive disponibile. Non confondere codice GitHub con codice pubblicato
+nel deployment Apps Script.
+
+La cache giornaliera OHLCV compressa è ripartita in32 bucket. Ogni lotto salva
+al massimo2 bucket modificati e poi pubblica un manifest con compare-and-swap
+e rilettura firmata. Timestamp originali, fonte, calendario, valuta e flags
+sono conservati: il server ricalcola la freschezza contro la seduta attesa.
+Niente interpolazioni, forward-fill o conversione di provvisori in correnti.
+Lo schema cache e gli hash di policy/mappe impediscono il riuso incompatibile;
+una semplice versione server nuova non invalida da sola il contenuto.
+
+La parte compressa della cache è limitata a64MiB e1100 voci, con un massimo
+di512KB per serie giornaliera e2MB per oggetto remoto. La RAM effettiva include
+Python/calendari e resta sotto i memory guard esistenti400/460MB: non equivale
+al solo limite della cache. Un risultato giornaliero non ancora salvato non
+è eliminato per TTL/capienza: a saturazione si interrompe l'inserimento con
+un errore esplicito. Intraday e cache ausiliarie restano sacrificabili.
+Oggetti tecnici cache e manifest non generano una riga Registro a ogni lotto;
+le ricevute degli archivi scanner continuano nel Registro originale. Nessuna
+cancellazione automatica dei file immutabili Drive è introdotta; monitorarne
+la dimensione nella manutenzione ordinaria.
+
+Il cron già esistente che chiama /warm mantiene esattamente lo stesso URL.
+La chiamata attiva in background anche la preraccolta tecnica dal lunedì al
+venerdì alle09:20(EU) e16:00(US), Europe/Rome, con finestra15minuti. Gli altri
+slot e la pianificazione ChatGPT restano invariati. La prenotazione firmata
+su Google impedisce avvii duplicati tra tick/processi/riavvii. Un job interrotto
+prima della conclusione non è certificato completo: il lease dura20minuti e
+non viene inventato uno storico dello slot. Lo scanner usa il profilo tecnico
+balanced; lo stato appreso effettivo e i gate vengono applicati dall'agente
+ordinario, che può richiedere la propria selezione senza override dello stato.
+La preraccolta non è esecuzione completa del controllo di conto/rischio e non
+registra Esecuzioni COMPLETADO o un ticket approvato. Nessun LLM viene chiamato
+dal cron e nessuna operazione eToro viene inviata.
+
+Controllare `/status.price_cache_persistence` (READY, verified_entries),
+`/status.cron_collector` (last_warm_call, slot, ARCHIVED/errore esplicito).
+Durante il ripristino la cache può essere parziale: il warmer continua senza
+sovrascrivere dati più recenti con copie salvate. La persistenza è asincrona:
+i dati non ancora verificati al momento di un crash possono andare persi; non
+promettere recupero di dati mai salvati. Il primo deploy richiede ancora un
+riempimento, poiché la1.7.53 non esporta la propria RAM.
+
+Collaudo: verificare il salvataggio su fonti reali, annotare il numero delle
+serie verificate, riavviare realmente Render e verificare restored_entries e
+la data di acquisizione preservata. Oggi25/10/2026 è domenica: la prima prova
+dello slot automatico è lunedì26/10 alle09:20 Europe/Rome; un test sintetico
+non va presentato come quel ciclo. Nessuna modifica al mandato r8 o al rischio.
