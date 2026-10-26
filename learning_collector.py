@@ -4,22 +4,58 @@ One persisted task lease precedes every external block. A failed read/write neve
 advances its task; same task/request IDs survive process loss. No orders/LLM.
 """
 import copy
+import re
 import threading
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime,timedelta
 from archive_client import ArchiveClient,ArchiveError,configuration_status
 from collector_store import Store,Conflict
 from adaptive_method import digest,stamp,validate_state
 from opportunity_cohorts import update as update_cohorts
 from outcome_ledger import ingest,kpis,category_kpis
 from feedback_cycle import run as feedback
-from learning_sources import Pending,now
+from learning_sources import Pending,now,rate_timestamp
 from etoro_learning_client import ReadFailure
 
-VERSION='1.1.0';MAX_ATTEMPTS=3;LEASE_SECONDS=600
+VERSION='1.2.0';MAX_ATTEMPTS=3;LEASE_SECONDS=600
 ARCHIVE_RECOVERY_VERSION='archive-recovery-1'
 RECOVERABLE_ARCHIVE_ERRORS={'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}
+RATE_RECOVERY_VERSION='etoro-rate-utc-1'
+
+
+def validation_code(exc):
+    # Expose machine codes, never exception text containing payloads or secrets.
+    if isinstance(exc,ValueError) and re.fullmatch(r'[A-Z][A-Z0-9_]{2,95}',str(exc)):
+        return str(exc)
+    return 'COLLECTOR_INPUT_FIELD_MISSING' if isinstance(exc,KeyError) else 'COLLECTOR_INPUT_OR_SOURCE_INVALID'
+
+
+def recover_rate_tasks(state,store,as_of):
+    """Reopen once only ENTRY failures with saved naive UTC rate evidence."""
+    recovered=0
+    for task in state['tasks'].values():
+        if (task['op']!='ENTRY' or task['state']!='BLOCKED'
+                or task.get('error') not in {'COLLECTOR_INPUT_OR_SOURCE_INVALID','LEARNING_TIMEZONE_REQUIRED'}
+                or task.get('rate_timestamp_recovery') or not task.get('raw_response_ref')):continue
+        raw=store.get(task['raw_response_ref']);found=False
+        for read in raw.get('reads',[]):
+            if read.get('request',{}).get('path')!='/api/v2/market-data/rates':continue
+            from etoro_learning_client import unpack
+            for quote in unpack(read).get('results',[]):
+                value=quote.get('date')
+                try:
+                    rate_timestamp(value)
+                    naive=datetime.fromisoformat(value.replace('Z','+00:00')).utcoffset() is None
+                except (ValueError,TypeError):continue
+                found=found or naive
+        if not found:continue
+        task['rate_timestamp_recovery']=dict(version=RATE_RECOVERY_VERSION,at=as_of,
+            previous_error=task['error'],previous_attempts=task['attempts'],raw_response_ref=task['raw_response_ref'])
+        task.update(state='RETRY',attempts=0,not_before=as_of,error=None)
+        task.pop('lease_owner',None);task.pop('lease_until',None)
+        recovered+=1
+    return recovered
 
 
 def recover_archive_tasks(state,as_of):
@@ -155,7 +191,9 @@ class Worker:
                     state['source_generation']=generation
                 state['account_check_ref']=remember(store,state,profile)
                 self.account_binding=binding;self.account_failures=0
-            if recover_archive_tasks(state,self.clock()):
+            recovered=recover_archive_tasks(state,self.clock())
+            recovered+=recover_rate_tasks(state,store,self.clock())
+            if recovered:
                 head=store.save(state,head) # Recovery must be durable before reads.
             plan(state,self.clock())
             # Up to four small completed blocks per wake; pending market/exit
@@ -188,9 +226,10 @@ class Worker:
                 except (ReadFailure,ArchiveError,ValueError,KeyError,TypeError) as exc:
                     task=rollback()
                     permanent=getattr(exc,'permanent',False)
-                    code=str(exc) if isinstance(exc,(ReadFailure,ArchiveError)) else 'COLLECTOR_INPUT_OR_SOURCE_INVALID'
+                    code=str(exc) if isinstance(exc,(ReadFailure,ArchiveError)) else validation_code(exc)
                     task.update(state='BLOCKED' if permanent or task['attempts']>=MAX_ATTEMPTS else 'RETRY',error=code,
                         not_before=(stamp(self.clock())+timedelta(seconds=max(60,getattr(exc,'retry_after',60)*2**(task['attempts']-1)))).isoformat())
+                    task['diagnostic']=dict(exception_type=type(exc).__name__,operation=task['op'],code=code)
                 except Exception:
                     task=rollback()
                     task.update(state='BLOCKED' if task['attempts']>=MAX_ATTEMPTS else 'RETRY',error='COLLECTOR_TASK_FAILED',not_before=(stamp(self.clock())+timedelta(seconds=60*task['attempts'])).isoformat())
@@ -214,10 +253,12 @@ class Worker:
             for row in state['cohorts'].values():counts[row['state']]=counts.get(row['state'],0)+1
             pending=[t for t in state['tasks'].values() if t['state']!='DONE']
             ledger_count=len(store.get(state['ledger_ref']))
-            with self.lock:self.info.update(state='READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=sum(t['state']=='BLOCKED' for t in pending),
+            blocked=sum(t['state']=='BLOCKED' for t in pending)
+            with self.lock:self.info.update(state='DEGRADED' if blocked else 'READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=blocked,
                 issues=sorted(set(t.get('error') for t in pending if t.get('error')))[:8],last_checked_at=self.clock(),account_verified=state['account_verified'],
                 restored_checkpoint=restored,checkpoint_object_id=head,ledger_entries=ledger_count,
                 recovered_archive_tasks=sum(bool(t.get('archive_recovery')) for t in state['tasks'].values()),
+                recovered_rate_timestamp_tasks=sum(bool(t.get('rate_timestamp_recovery')) for t in state['tasks'].values()),
                 source_registry_sha=state['source_registry_sha'])
         except Conflict:
             with self.lock:self.info.update(state='WAIT_OTHER_WORKER',checkpoint_verified=False)

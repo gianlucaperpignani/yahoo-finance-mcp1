@@ -1,5 +1,5 @@
 # yahoo-finance-mcp1
-# Sprint 2 — release 1.7.59
+# Sprint 2 — release 1.7.60
 
 Policy quantitative e parametri discovery sono distinti in `risk_policy.json`
 e `screening_config.json`. `release_contract.json` ne fissa gli SHA e il pin
@@ -53,6 +53,13 @@ read-only senza inventare costi di uscita. Il campione reale resta da maturare.
 Release1.7.56 collega il collettore read-only al cron `/warm` esistente.
 Non attivare prima di pubblicare ArchiveGateway1.2.0. Istruzioni e limiti
 sono in `apps_script/SETUP.md`, sezione Collettore autonomo.
+
+Release1.7.60: normalizzazione UTC del solo campo `rate.date` di eToro v2,
+secondo schema ufficiale; risposta grezza e prova della conversione conservate.
+I timestamp generici restano rigorosi e quote vecchie/future non diventano valide.
+Recupero una tantum delle ENTRY bloccate solo con risposte archiviate che
+dimostrano timestamp rate senza suffisso; checkpoint prima di riprendere.
+Codici di validazione sicuri e stato DEGRADED se esistono attività bloccate.
 
 Release1.7.59: recupero una tantum delle attività bloccate dai soli errori
 transitori di archivio. Mantiene identità, argomenti e riferimenti originali,

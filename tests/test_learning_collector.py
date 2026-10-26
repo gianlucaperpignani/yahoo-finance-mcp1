@@ -8,7 +8,7 @@ from adaptive_method import digest
 from archive_client import ArchiveError
 from collector_store import Conflict
 from opportunity_cohorts import update
-from learning_collector import Worker,add_task,eligible,MAX_ATTEMPTS,initialize,recover_archive_tasks
+from learning_collector import Worker,add_task,eligible,MAX_ATTEMPTS,initialize,recover_archive_tasks,recover_rate_tasks,validation_code
 from learning_sources import Pending,account_fingerprint
 from etoro_learning_client import Client,ReadFailure
 import test_completion_flow as fixtures
@@ -144,6 +144,48 @@ class CheckpointTests(unittest.TestCase):
         execute.assert_not_called()
         self.assertEqual(self.store.value['tasks'][ident]['state'],'BLOCKED')
         self.assertEqual(worker.status()['state'],'ERROR')
+    def test_rate_recovery_requires_original_rate_evidence_and_runs_once(self):
+        state=dict(tasks={})
+        ident=add_task(state,'ENTRY','cohort',dict(cohort='synthetic'))
+        task=state['tasks'][ident]
+        task.update(state='BLOCKED',attempts=3,error='COLLECTOR_INPUT_OR_SOURCE_INVALID')
+        self.assertEqual(recover_rate_tasks(state,self.store,self.clock[0]),0)
+        raw=dict(reads=[dict(request=dict(path='/api/v2/market-data/rates'),statusCode=200,body=dict(results=[dict(date='2026-10-26T13:31:00.507')]))])
+        ref=self.store.put(raw);task['raw_response_ref']=ref
+        self.assertEqual(recover_rate_tasks(state,self.store,self.clock[0]),1)
+        self.assertEqual(task['state'],'RETRY');self.assertEqual(task['attempts'],0)
+        self.assertEqual(task['rate_timestamp_recovery']['raw_response_ref'],ref)
+        self.assertEqual(task['id'],ident);self.assertEqual(task['arguments'],dict(cohort='synthetic'))
+        task.update(state='BLOCKED',attempts=3,error='COLLECTOR_INPUT_OR_SOURCE_INVALID')
+        self.assertEqual(recover_rate_tasks(state,self.store,self.clock[0]),0)
+    def test_rate_recovery_excludes_other_errors_routes_and_aware_timestamps(self):
+        for error,op,path,date in [('ETORO_HTTP_403','ENTRY','/api/v2/market-data/rates','2026-10-26T13:31:00'),('COLLECTOR_INPUT_OR_SOURCE_INVALID','EXIT','/api/v2/market-data/rates','2026-10-26T13:31:00'),('COLLECTOR_INPUT_OR_SOURCE_INVALID','ENTRY','/api/v2/trading/info/costs','2026-10-26T13:31:00'),('COLLECTOR_INPUT_OR_SOURCE_INVALID','ENTRY','/api/v2/market-data/rates','2026-10-26T13:31:00Z')]:
+            state=dict(tasks={});ident=add_task(state,op,'test',{})
+            ref=self.store.put(dict(reads=[dict(request=dict(path=path),statusCode=200,body=dict(results=[dict(date=date)]))]))
+            state['tasks'][ident].update(state='BLOCKED',attempts=3,error=error,raw_response_ref=ref)
+            before=copy.deepcopy(state)
+            self.assertEqual(recover_rate_tasks(state,self.store,self.clock[0]),0);self.assertEqual(state,before)
+    def test_rate_recovery_checkpoint_failure_prevents_execution(self):
+        state=initialize(self.store);state.update(account_verified=True,tasks={})
+        ident=add_task(state,'ENTRY','synthetic',dict(cohort='synthetic'))
+        ref=self.store.put(dict(reads=[dict(request=dict(path='/api/v2/market-data/rates'),statusCode=200,body=dict(results=[dict(date='2026-10-26T13:31:00')]))]))
+        state['tasks'][ident].update(state='BLOCKED',attempts=3,error='COLLECTOR_INPUT_OR_SOURCE_INVALID',raw_response_ref=ref)
+        self.store.save(state,None);self.store.fail_save=True
+        worker=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0])
+        with patch.object(worker,'execute') as execute:worker._run()
+        execute.assert_not_called();self.assertEqual(self.store.value['tasks'][ident]['state'],'BLOCKED')
+    def test_safe_validation_codes_and_degraded_status(self):
+        self.assertEqual(validation_code(ValueError('LEARNING_TIMEZONE_REQUIRED')),'LEARNING_TIMEZONE_REQUIRED')
+        self.assertEqual(validation_code(ValueError('private payload contents')),'COLLECTOR_INPUT_OR_SOURCE_INVALID')
+        self.assertEqual(validation_code(KeyError('private field value')),'COLLECTOR_INPUT_FIELD_MISSING')
+        state=initialize(self.store);state.update(account_verified=True,tasks={})
+        ident=add_task(state,'DISCOVER','bad-source',{})
+        state['tasks'][ident]['attempts']=2;self.store.save(state,None)
+        worker=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0])
+        with patch('learning_collector.plan'),patch.object(worker,'execute',side_effect=ValueError('ETORO_RATE_TIMESTAMP_INVALID')):worker._run()
+        self.assertEqual(worker.status()['state'],'DEGRADED');self.assertEqual(worker.status()['blocked_tasks'],1)
+        self.assertEqual(worker.status()['issues'],['ETORO_RATE_TIMESTAMP_INVALID'])
+        self.assertEqual(self.store.value['tasks'][ident]['diagnostic']['exception_type'],'ValueError')
     def test_account_mismatch_cannot_collect_trade_history(self):
         with patch.object(self.sources,'verify_account',side_effect=ReadFailure('COLLECTOR_ACCOUNT_MISMATCH',permanent=True)):
             w=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0]);w._run()
