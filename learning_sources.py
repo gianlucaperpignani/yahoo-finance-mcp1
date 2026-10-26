@@ -26,6 +26,24 @@ class Pending(RuntimeError):
 
 def now():return datetime.now(timezone.utc).isoformat()
 
+RATE_TIME_REFERENCE='https://api-portal.etoro.com/api-reference/market-data/retrieve-bidask-rates-for-one-or-more-instruments; rate.date: UTC timestamp of the rate'
+
+
+def rate_timestamp(value):
+    """Normalize only v2 rate.date: the official schema specifies UTC.
+
+    Broker responses may omit the suffix. Other timestamps remain strict;
+    event time never becomes retrieval time and raw responses stay unchanged.
+    """
+    if not isinstance(value,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:Z|[+-]\d{2}:\d{2})?',value):
+        raise ValueError('ETORO_RATE_TIMESTAMP_INVALID')
+    try:
+        parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
+        if parsed.utcoffset() is None:parsed=parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    except ValueError:raise ValueError('ETORO_RATE_TIMESTAMP_INVALID') from None
+
+
 def request_id(key):return str(uuid.uuid5(uuid.NAMESPACE_URL,'etoro-research/'+key))
 
 def account_fingerprint(me):return digest({k:me.get(k) for k in ('gcid','realCid','username')})
@@ -146,18 +164,21 @@ class Sources:
         fx_values,raw_fx=self.live_fx([contexts[k]['currency'] for k in all_keys],task)
         rates=self.client.read('/api/v2/market-data/rates',query={'instrumentIds':','.join(map(str,ids))},request_id=request_id(task+'/quotes'))
         byid={q['instrumentId']:q for q in unpack(rates).get('results',[])};overview=dict(statusCode=200,xRequestId=rates['xRequestId'],instruments=[])
-        normalized={};identities={}
+        normalized={};identities={};timestamp_evidence={}
         for key in all_keys:
             context=contexts[key];q=byid.get(context['metadata']['instrumentId'],{})
             if q.get('quoteType')!='realtime':raise Pending('ENTRY_QUOTE_DELAYED_OR_UNAVAILABLE:'+key)
+            quote_at=rate_timestamp(q.get('date'))
+            if not 0<=(stamp(now())-stamp(quote_at)).total_seconds()<=300:raise Pending('ENTRY_QUOTE_STALE_OR_FUTURE:'+key)
+            timestamp_evidence[key]=dict(raw=q['date'],normalized=quote_at,reference=RATE_TIME_REFERENCE)
             scale=context.get('broker_scale',1.)
-            overview['instruments'].append(dict(market=dict(symbol=key,instrumentId=context['metadata']['instrumentId']),quote=dict(ask=q.get('ask')*scale if q.get('ask') else None,bid=q.get('bid')*scale if q.get('bid') else None,asOf=q.get('date'))))
+            overview['instruments'].append(dict(market=dict(symbol=key,instrumentId=context['metadata']['instrumentId']),quote=dict(ask=q.get('ask')*scale if q.get('ask') else None,bid=q.get('bid')*scale if q.get('bid') else None,asOf=quote_at)))
             fx,reference=fx_values[context['currency']]
             normalized[key]=dict(context,fx_to_usd=fx,fx_reference=reference)
             identities[key]=context['identity']
         observed=now()
         result=prepare_entry(overview,normalized,identities,costs,benchmark,observed)
-        result.update(raw_rates=rates,raw_eligibility=eligibility,raw_fee_source=fee_source,raw_fx=raw_fx,research_notional_usd=notional)
+        result.update(raw_rates=rates,quote_timestamp_evidence=timestamp_evidence,raw_eligibility=eligibility,raw_fee_source=fee_source,raw_fx=raw_fx,research_notional_usd=notional)
         return result
     def exit(self,row,task):
         if stamp(now())<stamp(row['planned_exit_at']):raise Pending('WAIT_PLANNED_CLOSE',300)
@@ -191,9 +212,11 @@ class Sources:
         quotes={r['instrumentId']:r for r in unpack(response).get('results',[])}
         for currency in needed:
             symbol,inverse=pairs[currency];q=quotes.get(rows[symbol]['instrumentId'],{})
-            if q.get('quoteType')!='realtime' or not q.get('date') or not 0<=(stamp(now())-stamp(q['date'])).total_seconds()<=300 or not 0<q.get('bid',0)<=q.get('ask',0):raise Pending('LIVE_FX_QUOTE_STALE_OR_MISSING')
+            if q.get('quoteType')!='realtime' or not q.get('date'):raise Pending('LIVE_FX_QUOTE_STALE_OR_MISSING')
+            quote_at=rate_timestamp(q['date'])
+            if not 0<=(stamp(now())-stamp(quote_at)).total_seconds()<=300 or not 0<q.get('bid',0)<=q.get('ask',0):raise Pending('LIVE_FX_QUOTE_STALE_OR_MISSING')
             mid=(q['bid']+q['ask'])/2;value=1/mid if inverse else mid
-            values[currency]=(value,response['xRequestId']+' '+symbol+' '+q['date']+'; observed midpoint for shadow comparison, not booked broker conversion')
+            values[currency]=(value,response['xRequestId']+' '+symbol+' raw='+q['date']+' normalized='+quote_at+'; '+RATE_TIME_REFERENCE+'; observed midpoint for shadow comparison, not booked broker conversion')
         return values,[metadata,response]
 
     def history_page(self,minimum,page,task):
