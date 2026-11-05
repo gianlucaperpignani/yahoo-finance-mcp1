@@ -1,5 +1,5 @@
 # yahoo-finance-mcp1
-# Sprint 2 — release 1.7.60
+# Sprint 2 — release 1.7.61
 
 Policy quantitative e parametri discovery sono distinti in `risk_policy.json`
 e `screening_config.json`. `release_contract.json` ne fissa gli SHA e il pin
@@ -71,3 +71,13 @@ del probe transitorio e restore cache a quattro bucket per tick. Status compatto
 con riferimenti al manifest completo e misure di chiamate/byte; nessuna cache
 degli esiti di rischio. Script Google1.2.0 invariato. Test sintetici a790 serie
 non certificano carico reale prolungato, slot feriale o apprendimento.
+
+Release1.7.61: recover superseded collection tasks without claiming their execution;
+reopen once the exact-session EXIT requiring the new verified adjustment bridge.
+Yahoo histories retain provider raw closes and adjusted/raw factors. Shadow exit
+comparison uses adjusted exit close divided by the entry-session factor, with
+source/hash evidence; unsupported or missing factors remain blocked. This is a
+provider total-return comparison, not real P/L or a live executable quote.
+Scanner archives retry independently on existing /warm ticks; transient signed
+archive operations receive one idempotent retry. No risk thresholds, cohort
+horizons, credentials, order permissions or schedules change.
