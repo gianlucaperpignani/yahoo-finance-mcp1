@@ -76,7 +76,9 @@ Release1.7.61: recover superseded collection tasks without claiming their execut
 reopen once the exact-session EXIT requiring the new verified adjustment bridge.
 Yahoo histories retain provider raw closes and adjusted/raw factors. Shadow exit
 comparison uses adjusted exit close divided by the entry-session factor, with
-source/hash evidence; unsupported or missing factors remain blocked. This is a
+source/hash evidence. Reported splits require a separate verified share-unit
+bridge and remain blocked; raw/adjusted factors alone cannot establish their
+basis. Missing factors remain blocked. This is a
 provider total-return comparison, not real P/L or a live executable quote.
 Scanner archives retry independently on existing /warm ticks; transient signed
 archive operations receive one idempotent retry. No risk thresholds, cohort
