@@ -63,10 +63,10 @@ class AdjustmentBridgeTests(unittest.TestCase):
         e,p,h=self.fixture();q=close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic USD')
         self.assertAlmostEqual(q['close'],102/.99);self.assertEqual(q['kind'],'SESSION_CLOSE')
         self.assertEqual(q['adjustment_bridge']['entry_adjustment_factor'],.99)
-    def test_split_unit_bridge(self):
+    def test_split_needs_separate_verified_share_unit_bridge(self):
         e,p,h=self.fixture(.5,1);h['actions']=[dict(date='2026-10-20',dividends=0,stock_splits=2)]
         h['history'][1].update(raw_close=51,close=51)
-        self.assertEqual(close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')['close'],102)
+        with self.assertRaisesRegex(ValueError,'SPLIT_BASIS_BRIDGE'):close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')
     def test_adjustment_after_horizon_cancels(self):
         e,p,h=self.fixture(.99,.99);h['actions'][0]['date']='2026-10-21'
         self.assertAlmostEqual(close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')['close'],102)
