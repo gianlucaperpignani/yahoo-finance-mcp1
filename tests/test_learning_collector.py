@@ -53,6 +53,7 @@ class CheckpointTests(unittest.TestCase):
         self.f=fixtures.CompletionTests();cs=update(dict(as_of='2026-11-02T09:00:00+00:00',archive=self.f.archive()))['store']
         self.seed=dict(input=dict(learning_states={}),output=dict(as_of='2026-11-02T09:00:00+00:00',ledger=dict(entries={}),cohort_collection=dict(store=cs)))
         self.store=Backend(self.seed);self.clock=['2026-11-02T09:01:00+00:00'];self.sources=Sources(self.f,self.clock)
+        frozen=patch('learning_collector.now',side_effect=lambda:self.clock[0]);frozen.start();self.addCleanup(frozen.stop)
     def wake(self,worker=None):
         worker=worker or Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0])
         with patch('learning_collector.now',side_effect=lambda:self.clock[0]):worker._run()
@@ -217,3 +218,24 @@ class AllowlistTests(unittest.TestCase):
             with self.assertRaises(ReadFailure):c.read(path,body=body)
 
 if __name__=='__main__':unittest.main()
+
+class Recovery61Tests(unittest.TestCase):
+    def test_superseded_context_keeps_error_and_never_claims_executed(self):
+        from learning_collector import recover_superseded_and_exit_tasks
+        state=dict(tasks={'ctx':dict(id='ctx',op='CONTEXT',key='c/0',state='BLOCKED',error='old error',arguments={'cohort':'c'},attempts=3)},cohorts={'c':dict(state='WAIT_EXIT',ref='verified-entry-ref')})
+        self.assertEqual(recover_superseded_and_exit_tasks(state,'2026-11-05T19:00:00Z'),1)
+        task=state['tasks']['ctx'];self.assertEqual(task['state'],'SUPERSEDED');self.assertEqual(task['error'],'old error')
+        self.assertEqual(task['superseded']['replaced_by'],'verified-entry-ref');self.assertNotIn('completed_at',task)
+    def test_only_supported_exit_gets_one_retry_window(self):
+        from learning_collector import recover_superseded_and_exit_tasks
+        state=dict(tasks={'x':dict(id='x',op='EXIT',key='c',state='BLOCKED',error='EXIT_CORPORATE_ACTION_ADJUSTMENT_REQUIRED',arguments={'cohort':'c'},attempts=3)},cohorts={})
+        self.assertEqual(recover_superseded_and_exit_tasks(state,'2026-11-05T19:00:00Z'),1)
+        state['tasks']['x'].update(state='BLOCKED',attempts=3,error='EXIT_CORPORATE_ACTION_ADJUSTMENT_REQUIRED')
+        self.assertEqual(recover_superseded_and_exit_tasks(state,'2026-11-05T19:01:00Z'),0)
+    def test_later_verified_discovery_supersedes_older_but_not_future_or_running(self):
+        from learning_collector import recover_superseded_and_exit_tasks
+        def task(k,state):return dict(id=k,op='DISCOVER',key=k,state=state,arguments={},attempts=3,error='interrupted',completed_at=k)
+        a=task('2026-11-04T08:30','BLOCKED');b=task('2026-11-05T08:30','DONE');c=task('2026-11-05T09:30','BLOCKED')
+        state=dict(tasks={x['id']:x for x in [a,b,c]},cohorts={})
+        self.assertEqual(recover_superseded_and_exit_tasks(state,'2026-11-05T19:00:00Z'),1)
+        self.assertEqual(a['state'],'SUPERSEDED');self.assertEqual(c['state'],'BLOCKED')
