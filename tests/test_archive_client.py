@@ -67,3 +67,14 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(self.backend.calls,[])
 
 if __name__=='__main__':unittest.main()
+
+class TransientRetryTests(unittest.TestCase):
+    def test_retry_once_with_same_fields_and_no_auth_bypass(self):
+        from unittest.mock import patch
+        client=ArchiveClient(URL,SECRET,opener=lambda *a,**k:None)
+        with patch.object(client,'_call_serial',side_effect=[ArchiveError('ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED'),{'ok':True}]) as call,patch('archive_client.time.sleep'):
+            self.assertEqual(client._call('cache_get',object_id='a'*64),{'ok':True})
+            self.assertEqual(call.call_count,2);self.assertEqual(call.call_args_list[0],call.call_args_list[1])
+        with patch.object(client,'_call_serial',side_effect=ArchiveError('ARCHIVE_SIGNATURE_INVALID')) as call:
+            with self.assertRaises(ArchiveError):client._call('cache_get',object_id='a'*64)
+            self.assertEqual(call.call_count,1)
