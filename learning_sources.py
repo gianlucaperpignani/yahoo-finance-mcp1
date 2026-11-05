@@ -182,10 +182,11 @@ class Sources:
         return result
     def exit(self,row,task):
         if stamp(now())<stamp(row['planned_exit_at']):raise Pending('WAIT_PLANNED_CLOSE',300)
-        quotes={};entry=row['entry'];plan=row['exit_plan']
+        quotes={};raw_histories={};entry=row['entry'];plan=row['exit_plan']
         for key,q in [*entry['quotes'].items(),('__benchmark__',entry['benchmark'])]:
             expected=plan['benchmark'] if key=='__benchmark__' else plan['entries'][key]
             hist=self.history(q['ticker'],start=stamp(q['timestamp']).date().isoformat(),end=(stamp(now()).date()+timedelta(days=1)).isoformat(),prefer_etoro=False,require_adjustment_bridge=True)
+            raw_histories[key]=hist
             # A cached payload fetched before close must be refreshed by normal
             # calendar policy, never stamped now to pass a timestamp check.
             if q['currency']=='USD':fx,fx_ref=1.,'USD/USD identity'
@@ -199,7 +200,7 @@ class Sources:
                 if str(exc) in {'EXIT_SESSION_BAR_MISSING_OR_DUPLICATE','EXIT_HISTORY_BEFORE_CLOSE'}:raise Pending(str(exc),300) from None
                 raise
         benchmark=quotes.pop('__benchmark__')
-        return dict(observed_at=now(),quotes=quotes,benchmark=benchmark,session_complete=True,calendar_reference='recorded exact-session plan '+plan['plan_hash'])
+        return dict(observed_at=now(),quotes=quotes,benchmark=benchmark,raw_histories=raw_histories,session_complete=True,calendar_reference='recorded exact-session plan '+plan['plan_hash'])
     def live_fx(self,currencies,task):
         pairs={'EUR':('EURUSD',False),'GBP':('GBPUSD',False),'CHF':('USDCHF',True),'SEK':('USDSEK',True),'NOK':('USDNOK',True),'DKK':('USDDKK',True)}
         needed=sorted(set(currencies)-{'USD'});values={'USD':(1.,'USD/USD identity')}
