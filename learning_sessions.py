@@ -82,6 +82,9 @@ def close_from_history(payload,expected,entry,as_of,fx_to_usd,fx_reference):
         for action in payload['actions']:
             if not isinstance(action,dict) or set(action)-{'date','dividends','stock_splits'} or not isinstance(action.get('date'),str):
                 raise ValueError('EXIT_ACTION_TYPE_UNSUPPORTED')
+            # Provider Close itself may already be split-adjusted. A ratio of
+            # adjusted/raw alone cannot establish the broker entry share unit.
+            if action.get('stock_splits',0) not in (0,1):raise ValueError('EXIT_SPLIT_BASIS_BRIDGE_REQUIRED')
             for key in ('dividends','stock_splits'):
                 if key in action and (not finite(action[key]) or action[key]<0):raise ValueError('EXIT_ACTION_INVALID')
         for r in [opening[0],rows[0]]:
