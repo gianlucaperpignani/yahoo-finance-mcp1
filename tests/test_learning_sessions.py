@@ -53,3 +53,27 @@ class TargetTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+class AdjustmentBridgeTests(unittest.TestCase):
+    def fixture(self,entry_factor=.99,exit_factor=1):
+        e=SessionTests().entry();p=exit_plan({'AAA':e},e,e['timestamp'])['entries']['AAA']
+        payload=dict(ticker='AAA',calendar='XNYS',interval='1d',adjusted=True,data_quality={'calendar_validated':True},generated_at_utc='2026-10-21T07:20:00+00:00',source='SYNTHETIC',actions=[dict(date='2026-10-20',dividends=1,stock_splits=0)],coverage_start='2026-10-19',major_currency='USD',history=[dict(date='2026-10-19',raw_close=100,close=100*entry_factor,adjustment_factor=entry_factor),dict(date='2026-10-20',raw_close=102,close=102*exit_factor,adjustment_factor=exit_factor)])
+        return e,p,payload
+    def test_dividend_factor_bridge_is_reproducible_and_not_live_quote(self):
+        e,p,h=self.fixture();q=close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic USD')
+        self.assertAlmostEqual(q['close'],102/.99);self.assertEqual(q['kind'],'SESSION_CLOSE')
+        self.assertEqual(q['adjustment_bridge']['entry_adjustment_factor'],.99)
+    def test_split_unit_bridge(self):
+        e,p,h=self.fixture(.5,1);h['actions']=[dict(date='2026-10-20',dividends=0,stock_splits=2)]
+        h['history'][1].update(raw_close=51,close=51)
+        self.assertEqual(close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')['close'],102)
+    def test_adjustment_after_horizon_cancels(self):
+        e,p,h=self.fixture(.99,.99);h['actions'][0]['date']='2026-10-21'
+        self.assertAlmostEqual(close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')['close'],102)
+    def test_missing_or_fabricated_factor_or_unknown_action_still_blocks(self):
+        for alter in ('missing','mismatch','unknown'):
+            e,p,h=self.fixture()
+            if alter=='missing':h['history'][0].pop('raw_close')
+            if alter=='mismatch':h['history'][0]['adjustment_factor']=.5
+            if alter=='unknown':h['actions'][0]['spinoff']=1
+            with self.assertRaises(ValueError):close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')
