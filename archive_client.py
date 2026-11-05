@@ -81,7 +81,14 @@ class ArchiveClient:
             with _METRICS_LOCK:
                 _METRICS['calls']+=1
                 _METRICS['by_action'][action]=_METRICS['by_action'].get(action,0)+1
-            try:return self._call_serial(action,**fields)
+            try:
+                for attempt in range(2):
+                    try:return self._call_serial(action,**fields)
+                    except ArchiveError as exc:
+                        if attempt or str(exc) not in {'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}:raise
+                        # New nonce, same immutable request/CAS identity; never bypass auth.
+                        time.sleep(1)
+
             except Exception:
                 with _METRICS_LOCK:_METRICS['failures']+=1
                 raise

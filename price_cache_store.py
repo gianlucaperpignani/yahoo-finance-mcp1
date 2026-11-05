@@ -87,7 +87,7 @@ class PriceCache:
         return self.verified.get(key)==(entry.get('ts'),hashlib.sha256(entry.get('blob',b'')).hexdigest())
     def _signature(self,entry):return entry.get('ts'),hashlib.sha256(entry['blob']).hexdigest()
     def status(self):
-        with self.lock:return copy.deepcopy(self.info)
+        with self.lock:return dict(copy.deepcopy(self.info),restore_buckets_completed=self.restore_cursor,restore_buckets_total=len(self.restore_plan[1]) if self.restore_plan else len(self.refs))
     def tick(self,cache,cache_lock,compat,max_items=1100):
         if not configuration_status()['configured']:return
         with self.lock:

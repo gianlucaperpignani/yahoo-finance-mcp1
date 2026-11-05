@@ -89,9 +89,10 @@ class CronTests(unittest.TestCase):
                 self.calls.append(action)
                 return dict(claimed=True,claim_token='synthetic') if action=='collector_claim' else dict(finished=True)
         c=Collector(factory=Client)
+        c.info['error']='old transient error'
         c._work('2026-10-26|09:20',['EU'],lambda m:dict(job_status='COMPLETE',job_id='synthetic',returned=3,scan_complete=False,opportunity_archive=dict(persistence=dict(durable_verified=True,object_id='a'*64))))
         self.assertEqual(c.status()['state'],'ARCHIVED');self.assertEqual(Client.calls,['collector_claim','collector_finish'])
-        self.assertFalse(c.status()['scan_complete']);self.assertFalse(c.status()['account_collected'])
+        self.assertFalse(c.status()['scan_complete']);self.assertFalse(c.status()['account_collected']);self.assertIsNone(c.status()['error'])
 
 if __name__=='__main__':unittest.main()
 

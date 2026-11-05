@@ -185,7 +185,7 @@ class Sources:
         quotes={};entry=row['entry'];plan=row['exit_plan']
         for key,q in [*entry['quotes'].items(),('__benchmark__',entry['benchmark'])]:
             expected=plan['benchmark'] if key=='__benchmark__' else plan['entries'][key]
-            hist=self.history(q['ticker'],start=stamp(q['timestamp']).date().isoformat(),end=(stamp(now()).date()+timedelta(days=1)).isoformat(),prefer_etoro=False)
+            hist=self.history(q['ticker'],start=stamp(q['timestamp']).date().isoformat(),end=(stamp(now()).date()+timedelta(days=1)).isoformat(),prefer_etoro=False,require_adjustment_bridge=True)
             # A cached payload fetched before close must be refreshed by normal
             # calendar policy, never stamped now to pass a timestamp check.
             if q['currency']=='USD':fx,fx_ref=1.,'USD/USD identity'

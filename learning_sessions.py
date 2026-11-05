@@ -4,6 +4,7 @@ Acquisition time and valuation session are separate. No live-price freshness
 exception for entry or tickets; historical exit values must match the plan.
 """
 from datetime import timedelta
+import math
 import copy
 from adaptive_method import stamp,digest
 from candidate_selection import finite
@@ -65,15 +66,44 @@ def close_from_history(payload,expected,entry,as_of,fx_to_usd,fx_reference):
     if 'actions' not in payload or not isinstance(payload['actions'],list):raise ValueError('EXIT_CORPORATE_ACTIONS_MISSING')
     # An event outside this interval still needs an adjustment-factor bridge:
     # Yahoo retro-adjustment can change historical prices before later events.
-    if payload['actions']:raise ValueError('EXIT_CORPORATE_ACTION_ADJUSTMENT_REQUIRED')
+    # Supported provider factors bridge adjusted history back to the entry share unit.
+    # Future adjustments cancel in the ratio; no live quote is substituted.
     if payload.get('ticker')!=entry.get('ticker') or not entry.get('ticker'):raise ValueError('EXIT_HISTORY_IDENTITY_MISMATCH')
     if not payload.get('coverage_start') or payload['coverage_start']>stamp(entry['timestamp']).date().isoformat():raise ValueError('EXIT_ACTIONS_INTERVAL_NOT_COVERED')
     rows=[r for r in payload.get('history',[]) if r.get('date')==expected['session_date']]
     if len(rows)!=1:raise ValueError('EXIT_SESSION_BAR_MISSING_OR_DUPLICATE')
     scale=payload.get('price_scale_to_major_currency',1)
     if not finite(scale) or scale<=0 or payload.get('major_currency',payload.get('currency'))!=entry.get('currency'):raise ValueError('EXIT_CURRENCY_OR_UNIT_MISMATCH')
-    return dict(kind='SESSION_CLOSE',instrument_id=entry['instrument_id'],calendar_id=expected['calendar_id'],session_date=expected['session_date'],
+    bridge=None;comparison_close=rows[0]['close']
+    import exchange_calendars as xc
+    entry_date=stamp(entry['timestamp']).astimezone(xc.get_calendar(expected['calendar_id']).tz).date().isoformat()
+    opening=[r for r in payload.get('history',[]) if r.get('date')==entry_date]
+    if len(opening)==1 and all(all(k in r for k in ('raw_close','adjustment_factor')) for r in [opening[0],rows[0]]):
+        for action in payload['actions']:
+            if not isinstance(action,dict) or set(action)-{'date','dividends','stock_splits'} or not isinstance(action.get('date'),str):
+                raise ValueError('EXIT_ACTION_TYPE_UNSUPPORTED')
+            # Provider Close itself may already be split-adjusted. A ratio of
+            # adjusted/raw alone cannot establish the broker entry share unit.
+            if action.get('stock_splits',0) not in (0,1):raise ValueError('EXIT_SPLIT_BASIS_BRIDGE_REQUIRED')
+            for key in ('dividends','stock_splits'):
+                if key in action and (not finite(action[key]) or action[key]<0):raise ValueError('EXIT_ACTION_INVALID')
+        for r in [opening[0],rows[0]]:
+            if any(not finite(r[k]) or r[k]<=0 for k in ('raw_close','close','adjustment_factor')):
+                raise ValueError('EXIT_ADJUSTMENT_FACTOR_INVALID')
+            if not math.isclose(r['close']/r['raw_close'],r['adjustment_factor'],rel_tol=1e-9,abs_tol=1e-12):
+                raise ValueError('EXIT_ADJUSTMENT_FACTOR_MISMATCH')
+        factor=opening[0]['adjustment_factor']
+        comparison_close=rows[0]['close']/factor
+        bridge=dict(version='entry-share-total-return-1',entry_session=entry_date,
+                    entry_adjustment_factor=factor,exit_adjustment_factor=rows[0]['adjustment_factor'],
+                    source_payload_sha256=digest(payload),actions_sha256=digest(payload['actions']),
+                    method='exit adjusted close / entry-session (adjusted close / raw close); provider total-return comparison in entry share units')
+    elif payload['actions']:
+        raise ValueError('EXIT_CORPORATE_ACTION_ADJUSTMENT_REQUIRED')
+    result=dict(kind='SESSION_CLOSE',instrument_id=entry['instrument_id'],calendar_id=expected['calendar_id'],session_date=expected['session_date'],
         valued_at=expected['close_at'],retrieved_at=payload['generated_at_utc'],price_basis=expected['price_basis'],
-        close=rows[0]['close']*scale,fx_to_usd=fx_to_usd,fx_reference=fx_reference,entry_quote_hash=digest(entry),entry_basis_verified=True,
+        close=comparison_close*scale,fx_to_usd=fx_to_usd,fx_reference=fx_reference,entry_quote_hash=digest(entry),entry_basis_verified=True,
         source_reference=payload['source']+'; payload_sha256='+digest(payload),
-        adjustments_reference=payload.get('adjustment_method','')+'; source-reported no actions; not issuer certification')
+        adjustments_reference=payload.get('adjustment_method','')+('; verified provider factor bridge; '+digest(bridge) if bridge else '; source-reported no actions; not issuer certification'))
+    if bridge:result['adjustment_bridge']=bridge
+    return result

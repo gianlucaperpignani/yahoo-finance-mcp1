@@ -44,6 +44,19 @@ def _archive_reference(job):
     return ref
 
 
+def retry_pending():
+    """Retry one saved immutable archive per warm tick, without another scan."""
+    if not scan_archive_store.enabled():return
+    with LOCK:
+        waiting=[j for j in JOBS.values() if j.get('archive') and j.get('finished')
+                 and not j.get('persistence',{}).get('durable_verified') and not j.get('persisting')
+                 and time.monotonic()-j.get('persist_attempt_at',0)>=ARCHIVE_RETRY_S]
+        if not waiting:return
+        job=min(waiting,key=lambda j:j['finished'])
+        job.update(persisting=True,persistence=dict(state='WRITING',durable_verified=False))
+        threading.Thread(target=_persist,args=(job,),daemon=True,name='scan-archive-recovery').start()
+
+
 def status():
     with LOCK:
         return dict(version="1.1.0", configured=scan_archive_store.enabled(), retained_jobs=len(JOBS),

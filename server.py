@@ -1,6 +1,6 @@
 # =============================================================================
 #  Yahoo Finance Storico - server MCP per il progetto "Trading eToro"
-#  Versione 1.7.60 - SOLA LETTURA
+#  Versione 1.7.61 - SOLA LETTURA
 #  25/10/2026: cache prezzi persistente e preraccolta tecnica tramite /warm.
 #  Sprint2: shortlist globale asincrona, protocollo adattivo e master r8.
 #  18/10/2026: policy condivisa e manifest reale di codice/mappe/dipendenze.
@@ -82,7 +82,7 @@ def _ensure_archive_probe():
 # -----------------------------------------------------------------------------
 # Parametri
 # -----------------------------------------------------------------------------
-VERSION = "1.7.60"
+VERSION = "1.7.61"
 RUNTIME_MANIFEST = build_runtime_manifest()
 PRICE_CACHE_COMPAT = hashlib.sha256(json.dumps(dict(schema=1,maps=RUNTIME_MANIFEST["maps_sha256"],policy=RUNTIME_MANIFEST["policy_files"]),sort_keys=True).encode()).hexdigest()
 RISK_ENGINE_VERSION = "server-risk 1.1.0"
@@ -1378,6 +1378,7 @@ def _fetch_yahoo_chart(ticker, period, interval, start, end, retries):
         if issue:
             dropped.append(issue)
         else:
+            bar.update(raw_close=float(close), adjustment_factor=factor)
             bars.append(bar)
     valid = {b["date"] for b in bars}
     actions = [{"date": d, "dividends": dividends.get(d, 0.0), "stock_splits": splits.get(d, 0.0)}
@@ -1780,7 +1781,7 @@ def _try_stooq_gap(payload):
 
 
 def _load_series(ticker, period=DEFAULT_PERIOD, interval="1d", start=None, end=None,
-                 user=True, allow_fetch=True, stale_ok=False, prefer_etoro=True):
+                 user=True, allow_fetch=True, stale_ok=False, prefer_etoro=True, require_adjustment_bridge=False):
     ticker = _validate_ticker(ticker)
     _validate_period(period, interval, start, end)
     if prefer_etoro and ticker in ETORO_ETF_MAP and interval == "1d" and etoro_history.risk_enabled():
@@ -1796,6 +1797,10 @@ def _load_series(ticker, period=DEFAULT_PERIOD, interval="1d", start=None, end=N
     entry = _cache_get(key)
     if entry and _cache_data(entry).get("source") == "ETORO_DAILY_BID":
         entry = None  # Yahoo-only path must not reuse the broker cache after rollback.
+    if entry and require_adjustment_bridge:
+        history=_cache_data(entry).get('history',[])
+        if not history or any('raw_close' not in r or 'adjustment_factor' not in r for r in history):
+            entry=None  # One real refetch upgrades legacy cached histories; no synthetic factor.
     if entry and _is_fresh(entry, code, expected, interval, end):
         if user:
             _count("cache_hits")
@@ -3079,6 +3084,7 @@ def warm_batch(max_items=WARM_BATCH_MAX, budget=WARM_TIME_BUDGET, market=None):
 def warm_api():
     try:
         _price_cache_tick()
+        cycle_scanner.retry_pending()
         cron_collector_runtime.tick(_cron_scan)
         learning_runtime.tick()
         return jsonify(warm_batch(request.args.get("max", WARM_BATCH_MAX), request.args.get("budget", WARM_TIME_BUDGET), request.args.get("market")))
