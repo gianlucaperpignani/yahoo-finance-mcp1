@@ -1,5 +1,5 @@
 # yahoo-finance-mcp1
-# Sprint 2 — release 1.7.63
+# Sprint 2 — release 1.7.64
 
 Policy quantitative e parametri discovery sono distinti in `risk_policy.json`
 e `screening_config.json`. `release_contract.json` ne fissa gli SHA e il pin
@@ -93,3 +93,7 @@ Release1.7.63 gives manifest commits a bounded90s timeout and reconciles lost
 acknowledgements against the signed head/exact immutable object. Other requests
 retain25s. Persist up to4 verified cache buckets per manifest to reduce repeated
 full-manifest validation; expose physical attempt counts and failure action.
+
+Release1.7.64 applies the existing BRK.B→BRK-B alias before calendar selection,
+so the share-class suffix cannot become an unknown foreign exchange. Unknown
+foreign suffixes remain unverified; no universe member or data gap is hidden.

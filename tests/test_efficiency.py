@@ -54,3 +54,11 @@ class EfficiencyTests(unittest.TestCase):
   self.assertEqual(small['persistent_archive'],d['persistent_archive'])
   self.assertIs(server._format_response('get_server_status',d,'full'),d)
 if __name__=='__main__':unittest.main()
+
+class CalendarAliasTests(unittest.TestCase):
+ def test_known_share_class_alias_keeps_nyse_calendar(self):
+  import server
+  self.assertEqual(server._calendar_code('BRK.B'),'XNYS')
+  self.assertEqual(server._calendar_code('BRK-B'),'XNYS')
+  self.assertEqual(server._calendar_code('SAP.DE'),'XETR')
+  self.assertIsNone(server._calendar_code('SYNTHETIC.UNKNOWN'))
