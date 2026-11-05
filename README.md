@@ -1,5 +1,5 @@
 # yahoo-finance-mcp1
-# Sprint 2 — release 1.7.62
+# Sprint 2 — release 1.7.63
 
 Policy quantitative e parametri discovery sono distinti in `risk_policy.json`
 e `screening_config.json`. `release_contract.json` ne fissa gli SHA e il pin
@@ -88,3 +88,8 @@ Release1.7.62 hardens partial adjustment evidence, action dates, local entry
 sessions and explicit minor-currency units. Existing invalid inputs remain blocked.
 Price-cache restore continues automatically in verified blocks after restart,
 without waiting for another scheduled warm call; failures retain backoff.
+
+Release1.7.63 gives manifest commits a bounded90s timeout and reconciles lost
+acknowledgements against the signed head/exact immutable object. Other requests
+retain25s. Persist up to4 verified cache buckets per manifest to reduce repeated
+full-manifest validation; expose physical attempt counts and failure action.
