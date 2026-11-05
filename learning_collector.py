@@ -18,7 +18,7 @@ from feedback_cycle import run as feedback
 from learning_sources import Pending,now,rate_timestamp
 from etoro_learning_client import ReadFailure
 
-VERSION='1.2.0';MAX_ATTEMPTS=3;LEASE_SECONDS=600
+VERSION='1.3.0';MAX_ATTEMPTS=3;LEASE_SECONDS=600
 ARCHIVE_RECOVERY_VERSION='archive-recovery-1'
 RECOVERABLE_ARCHIVE_ERRORS={'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}
 RATE_RECOVERY_VERSION='etoro-rate-utc-1'
@@ -75,6 +75,33 @@ def recover_archive_tasks(state,as_of):
         task.pop('lease_owner',None);task.pop('lease_until',None)
         recovered+=1
     return recovered
+
+
+def recover_superseded_and_exit_tasks(state,as_of):
+    """Keep obsolete failures as audit, reopen only the newly supported EXIT once."""
+    changes=0
+    tasks=state['tasks']
+    finished_discovery=[t for t in tasks.values() if t['op']=='DISCOVER' and t['state']=='DONE']
+    finished_discovery += [dict(v,id=k,state='DONE') for k,v in state.get('completed_tasks',{}).items() if v['op']=='DISCOVER']
+    newest=max(finished_discovery,key=lambda t:t.get('completed_at',t.get('at','')),default=None)
+    for task in tasks.values():
+        if task['state'] in {'DONE','SUPERSEDED'}:continue
+        if task['state']=='RUNNING' and stamp(task['lease_until'])>stamp(as_of):continue
+        cohort=state['cohorts'].get(task['arguments'].get('cohort'),{})
+        reason=None;replacement=None
+        if task['op']=='CONTEXT' and cohort.get('state') in {'WAIT_EXIT','CLOSED'}:
+            reason='CONTEXT_SUPERSEDED_BY_VERIFIED_ENTRY';replacement=cohort.get('ref')
+        elif task['op']=='DISCOVER' and newest and newest['id']!=task['id'] and newest['key']>task['key']:
+            reason='DISCOVERY_SUPERSEDED_BY_LATER_VERIFIED_SCAN';replacement=newest['id']
+        if reason:
+            task['superseded']=dict(at=as_of,reason=reason,replaced_by=replacement,previous_state=task['state'],previous_error=task.get('error'))
+            task.update(state='SUPERSEDED');changes+=1
+        elif (task['op']=='EXIT' and task['state']=='BLOCKED'
+              and task.get('error')=='EXIT_CORPORATE_ACTION_ADJUSTMENT_REQUIRED'
+              and not task.get('adjustment_bridge_recovery')):
+            task['adjustment_bridge_recovery']=dict(version='entry-share-total-return-1',at=as_of,previous_error=task['error'],previous_attempts=task['attempts'])
+            task.update(state='RETRY',attempts=0,not_before=as_of,error=None);changes+=1
+    return changes
 
 
 def one_store(row):
@@ -193,6 +220,7 @@ class Worker:
                 self.account_binding=binding;self.account_failures=0
             recovered=recover_archive_tasks(state,self.clock())
             recovered+=recover_rate_tasks(state,store,self.clock())
+            recovered+=recover_superseded_and_exit_tasks(state,self.clock())
             if recovered:
                 head=store.save(state,head) # Recovery must be durable before reads.
             plan(state,self.clock())
@@ -251,7 +279,7 @@ class Worker:
             with self.lock:self.applied_states=copy.deepcopy(state['learning_states'])
             counts={}
             for row in state['cohorts'].values():counts[row['state']]=counts.get(row['state'],0)+1
-            pending=[t for t in state['tasks'].values() if t['state']!='DONE']
+            pending=[t for t in state['tasks'].values() if t['state'] not in {'DONE','SUPERSEDED'}]
             ledger_count=len(store.get(state['ledger_ref']))
             blocked=sum(t['state']=='BLOCKED' for t in pending)
             with self.lock:self.info.update(state='DEGRADED' if blocked else 'READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=blocked,
@@ -259,7 +287,10 @@ class Worker:
                 restored_checkpoint=restored,checkpoint_object_id=head,ledger_entries=ledger_count,
                 recovered_archive_tasks=sum(bool(t.get('archive_recovery')) for t in state['tasks'].values()),
                 recovered_rate_timestamp_tasks=sum(bool(t.get('rate_timestamp_recovery')) for t in state['tasks'].values()),
-                source_registry_sha=state['source_registry_sha'])
+                source_registry_sha=state['source_registry_sha'],
+                superseded_tasks=sum(t['state']=='SUPERSEDED' for t in state['tasks'].values()),
+                adjustment_bridge_recovered_tasks=sum(bool(t.get('adjustment_bridge_recovery')) for t in state['tasks'].values()),
+                task_diagnostics=[dict(operation=t['op'],state=t['state'],attempts=t['attempts'],error=t.get('error'),diagnostic=t.get('diagnostic')) for t in pending[:12]])
         except Conflict:
             with self.lock:self.info.update(state='WAIT_OTHER_WORKER',checkpoint_verified=False)
         except ReadFailure as exc:
