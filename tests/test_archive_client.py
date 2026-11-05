@@ -78,3 +78,21 @@ class TransientRetryTests(unittest.TestCase):
         with patch.object(client,'_call_serial',side_effect=ArchiveError('ARCHIVE_SIGNATURE_INVALID')) as call:
             with self.assertRaises(ArchiveError):client._call('cache_get',object_id='a'*64)
             self.assertEqual(call.call_count,1)
+
+class CommitAcknowledgementTests(unittest.TestCase):
+    def test_lost_commit_ack_reads_signed_head_and_same_object_without_recommit(self):
+        from unittest.mock import patch
+        client=ArchiveClient(URL,SECRET,opener=lambda *a,**k:None)
+        key='a'*64
+        with patch.object(client,'_call_serial',side_effect=[ArchiveError('ARCHIVE_REQUEST_OR_RESPONSE_FAILED'),{'head':{'object_id':key}},{'object_id':key,'payload_json':'verified by Store'}]) as call:
+            self.assertEqual(client._call('cache_commit',object_id=key)['object_id'],key)
+            self.assertEqual([c.args[0] for c in call.call_args_list],['cache_commit','cache_head','cache_get'])
+    def test_manifest_timeout_is_bounded_and_other_actions_unchanged(self):
+        seen=[]
+        def opener(request,timeout):
+            seen.append(timeout);env=json.loads(request.data);req=json.loads(env['message'])
+            result=canonical(dict(ok=True,nonce=req['nonce']))
+            return Response(canonical(dict(message=result,signature=hmac.new(SECRET.encode(),result.encode(),hashlib.sha256).hexdigest())).encode())
+        client=ArchiveClient(URL,SECRET,opener=opener)
+        client._call('cache_commit',object_id='a'*64);client._call('cache_head')
+        self.assertEqual(seen,[90,25])
