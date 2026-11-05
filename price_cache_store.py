@@ -14,6 +14,7 @@ from archive_client import ArchiveClient, ArchiveError, canonical, digest, MAX_P
 
 VERSION='1.2.0'
 BUCKETS=32
+FLUSH_BUCKETS=4
 MAX_AGE=4*86400
 MAX_BLOB=512000
 MAX_RAM_BYTES=64*1024*1024
@@ -159,7 +160,7 @@ class PriceCache:
         if not dirty:return
         refs=dict(self.refs);saved={}
         ordered=sorted(dirty,key=lambda n:(int(n)-self.cursor)%BUCKETS)
-        for name in ordered[:2]:
+        for name in ordered[:FLUSH_BUCKETS]:
             rows=[encode_entry(k,v) for k,v in snapshot.items() if bucket(k)==name]
             part=dict(kind='PRICE_CACHE_BATCH',schema=1,compat=compat,bucket=name,entries=rows)
             refs[name]=store.put(part)
@@ -169,7 +170,7 @@ class PriceCache:
         head_id=store.put(manifest,base=self.head_id)
         self.refs=refs;self.head_id=head_id;self.verified.update(saved)
         self.verified={k:v for k,v in self.verified.items() if k in snapshot}
-        self.cursor=(int(ordered[min(1,len(ordered)-1)])+1)%BUCKETS
+        self.cursor=(int(ordered[min(FLUSH_BUCKETS-1,len(ordered)-1)])+1)%BUCKETS
 
 
 runtime=PriceCache()
