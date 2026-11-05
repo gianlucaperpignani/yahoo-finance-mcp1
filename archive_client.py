@@ -18,7 +18,7 @@ from urllib.request import Request, HTTPRedirectHandler, build_opener
 VERSION = '1.0.0'
 _GATEWAY_LOCK=threading.Lock()
 _METRICS_LOCK=threading.Lock()
-_METRICS=dict(calls=0,request_bytes=0,response_bytes=0,failures=0,by_action={})
+_METRICS=dict(calls=0,request_bytes=0,response_bytes=0,failures=0,by_action={},attempts_by_action={},recovered_commit_acks=0,last_failure=None)
 
 def io_metrics():
     import copy
@@ -85,15 +85,31 @@ class ArchiveClient:
                 for attempt in range(2):
                     try:return self._call_serial(action,**fields)
                     except ArchiveError as exc:
+                        if (not attempt and action=='cache_commit'
+                                and str(exc)=='ARCHIVE_REQUEST_OR_RESPONSE_FAILED'):
+                            # A socket timeout can follow a successful commit.
+                            # Check the signed head and read the exact immutable
+                            # object; never repeat a manifest mutation blindly.
+                            try:
+                                head=self._call_serial('cache_head').get('head') or {}
+                                if head.get('object_id')==fields.get('object_id'):
+                                    record=self._call_serial('cache_get',object_id=fields['object_id'])
+                                    with _METRICS_LOCK:_METRICS['recovered_commit_acks']+=1
+                                    return record
+                            except ArchiveError as recovery:
+                                if str(recovery) not in {'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}:raise
                         if attempt or str(exc) not in {'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}:raise
                         # New nonce, same immutable request/CAS identity; never bypass auth.
                         time.sleep(1)
 
-            except Exception:
-                with _METRICS_LOCK:_METRICS['failures']+=1
+            except Exception as exc:
+                with _METRICS_LOCK:
+                    _METRICS['failures']+=1
+                    _METRICS['last_failure']=dict(action=action,code=str(exc) if isinstance(exc,ArchiveError) else 'ARCHIVE_CLIENT_FAILED',at=self.clock())
                 raise
 
     def _call_serial(self,action,**fields):
+        with _METRICS_LOCK:_METRICS['attempts_by_action'][action]=_METRICS['attempts_by_action'].get(action,0)+1
         nonce=secrets.token_hex(16)
         msg=canonical(dict(protocol=1,action=action,timestamp=int(self.clock()),nonce=nonce,**fields))
         signature=hmac.new(self.secret,msg.encode(),hashlib.sha256).hexdigest()
@@ -102,7 +118,7 @@ class ArchiveClient:
         req=Request(self.url,data=body,
                     headers={'Content-Type':'application/json','User-Agent':'etoro-archive/1.0.0'})
         try:
-            with self.opener(req,timeout=25) as response:
+            with self.opener(req,timeout=90 if action=='cache_commit' else 25) as response:
                 target=urlparse(response.url)
                 if target.scheme!='https' or target.hostname not in {'script.google.com','script.googleusercontent.com'}:
                     raise ArchiveError('ARCHIVE_RESPONSE_ORIGIN_REJECTED')
