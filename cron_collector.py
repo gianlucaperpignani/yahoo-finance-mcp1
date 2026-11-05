@@ -60,7 +60,7 @@ class Collector:
                         client._call('collector_finish',slot_key=key,claim_token=claim['claim_token'],object_id=receipt['object_id'])
                         with self.lock:
                             self.attempted[key]=time.monotonic()+86400
-                            self.info.update(state='ARCHIVED',archive_object_id=receipt['object_id'],scan_complete=result.get('scan_complete'),returned=result.get('returned'),ticket_authorized=False)
+                            self.info.update(state='ARCHIVED',error=None,archive_object_id=receipt['object_id'],scan_complete=result.get('scan_complete'),returned=result.get('returned'),ticket_authorized=False)
                         return
                 elif result.get('job_status')=='ERROR':raise ArchiveError('CRON_SCANNER_JOB_FAILED')
                 time.sleep(30)
