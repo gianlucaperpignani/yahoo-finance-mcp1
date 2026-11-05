@@ -128,3 +128,19 @@ class ServerCacheTests(unittest.TestCase):
         item=dict(ts=NOW,coverage_end=payload['coverage_end'],blob=blob,blob_bytes=len(blob))
         decoded=decode_entry(encode_entry('s:SYNTHETIC:2y:1d:None:None',item),NOW)
         self.assertEqual(json.loads(zlib.decompress(decoded[1]['blob']))['history'],payload['history'])
+
+class RestoreContinuationTests(unittest.TestCase):
+    def test_verified_partial_restore_schedules_next_bounded_block(self):
+        from unittest.mock import patch
+        cache=PriceCache(factory=lambda:object(),clock=lambda:NOW);cache.busy=True
+        def block(*args,**kwargs):cache.restore_cursor+=4
+        with patch.object(cache,'restore',side_effect=block),patch('price_cache_store.threading.Timer') as timer:
+            cache._work({},threading.Lock(),'synthetic',1100)
+            self.assertEqual(cache.restore_cursor,4);timer.assert_called_once()
+            self.assertEqual(timer.call_args.args[0],1);self.assertFalse(cache.busy)
+    def test_restore_error_does_not_reschedule_without_backoff(self):
+        from unittest.mock import patch
+        cache=PriceCache(factory=lambda:object(),clock=lambda:NOW);cache.busy=True
+        with patch.object(cache,'restore',side_effect=ArchiveError('SYNTHETIC_READ_FAILED')),patch('price_cache_store.threading.Timer') as timer:
+            cache._work({},threading.Lock(),'synthetic',1100)
+            timer.assert_not_called();self.assertEqual(cache.status()['state'],'ERROR')

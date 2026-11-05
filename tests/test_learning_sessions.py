@@ -57,7 +57,7 @@ if __name__=='__main__':unittest.main()
 class AdjustmentBridgeTests(unittest.TestCase):
     def fixture(self,entry_factor=.99,exit_factor=1):
         e=SessionTests().entry();p=exit_plan({'AAA':e},e,e['timestamp'])['entries']['AAA']
-        payload=dict(ticker='AAA',calendar='XNYS',interval='1d',adjusted=True,data_quality={'calendar_validated':True},generated_at_utc='2026-10-21T07:20:00+00:00',source='SYNTHETIC',actions=[dict(date='2026-10-20',dividends=1,stock_splits=0)],coverage_start='2026-10-19',major_currency='USD',history=[dict(date='2026-10-19',raw_close=100,close=100*entry_factor,adjustment_factor=entry_factor),dict(date='2026-10-20',raw_close=102,close=102*exit_factor,adjustment_factor=exit_factor)])
+        payload=dict(ticker='AAA',calendar='XNYS',interval='1d',adjusted=True,data_quality={'calendar_validated':True},generated_at_utc='2026-10-21T07:20:00+00:00',source='SYNTHETIC',actions=[dict(date='2026-10-20',dividends=1,stock_splits=0)],coverage_start='2026-10-19',currency='USD',major_currency='USD',history=[dict(date='2026-10-19',raw_close=100,close=100*entry_factor,adjustment_factor=entry_factor),dict(date='2026-10-20',raw_close=102,close=102*exit_factor,adjustment_factor=exit_factor)])
         return e,p,payload
     def test_dividend_factor_bridge_is_reproducible_and_not_live_quote(self):
         e,p,h=self.fixture();q=close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic USD')
@@ -77,3 +77,22 @@ class AdjustmentBridgeTests(unittest.TestCase):
             if alter=='mismatch':h['history'][0]['adjustment_factor']=.5
             if alter=='unknown':h['actions'][0]['spinoff']=1
             with self.assertRaises(ValueError):close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')
+
+class AdjustmentEvidenceTests(AdjustmentBridgeTests):
+    def test_partial_or_absent_entry_factors_cannot_fall_through_without_actions(self):
+        for mode in ('factor','bar'):
+            e,p,h=self.fixture();h['actions']=[]
+            if mode=='factor':h['history'][0].pop('adjustment_factor')
+            else:h['history'].pop(0)
+            with self.assertRaisesRegex(ValueError,'ADJUSTMENT_REQUIRED'):close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')
+    def test_currency_contradiction_minor_scale_and_action_date_rejected(self):
+        for mode in ('currency','minor','date'):
+            e,p,h=self.fixture()
+            if mode=='currency':h['currency']='EUR'
+            if mode=='minor':h.update(currency='GBp',major_currency='GBP');e['currency']='GBP'
+            if mode=='date':h['actions'][0]['date']='NOT_A_DATE'
+            with self.assertRaises(ValueError):close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')
+    def test_explicit_minor_unit_scale_applied_exactly_once(self):
+        e,p,h=self.fixture(1,1);e['currency']='GBP';h.update(currency='GBp',major_currency='GBP',price_scale_to_major_currency=.01)
+        for r in h['history']:r.update(raw_close=r['raw_close']*100,close=r['close']*100)
+        self.assertAlmostEqual(close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')['close'],102)

@@ -12,7 +12,7 @@ import time
 import zlib
 from archive_client import ArchiveClient, ArchiveError, canonical, digest, MAX_PAYLOAD_BYTES, configuration_status
 
-VERSION='1.1.0'
+VERSION='1.2.0'
 BUCKETS=32
 MAX_AGE=4*86400
 MAX_BLOB=512000
@@ -95,19 +95,30 @@ class PriceCache:
             self.busy=True;self.last_attempt=self.clock();self.info['state']='RESTORING' if not self.ready else 'SAVING'
         threading.Thread(target=self._work,args=(cache,cache_lock,compat,max_items),daemon=True,name='price-cache-io').start()
     def _work(self,cache,cache_lock,compat,max_items):
+        before=self.restore_cursor;failed=False
         try:
             store=self.factory()
             if not self.ready:self.restore(store,cache,cache_lock,compat,max_items,budget=4)
             else:self.flush(store,cache,cache_lock,compat)
             with self.lock:self.info.update(state='READY' if self.ready else 'RESTORING',error=None,verified_entries=len(self.verified))
         except ArchiveError as exc:
+            failed=True
             if str(exc) in {'ARCHIVE_REMOTE_REJECTED:CACHE_HEAD_CONFLICT','PRICE_CACHE_HEAD_READBACK_INVALID'}:
                 self.ready=False;self.restore_plan=None;self.restore_cursor=0
             with self.lock:self.info.update(state='ERROR',error=str(exc))
         except Exception:
+            failed=True
             with self.lock:self.info.update(state='ERROR',error='PRICE_CACHE_IO_FAILED')
         finally:
-            with self.lock:self.busy=False
+            with self.lock:
+                self.busy=False
+                resume=not failed and not self.ready and self.restore_cursor>before
+                if resume:self.last_attempt=0
+            if resume:
+                # Continue bounded verified blocks; do not wait five minutes for
+                # each scheduled /warm call after a restart. Failures keep backoff.
+                timer=threading.Timer(1,self.tick,args=(cache,cache_lock,compat,max_items))
+                timer.daemon=True;timer.start()
     def restore(self,store,cache,lock,compat,max_items,budget=BUCKETS):
         if self.restore_plan is None:
             head=store.head();refs={}
