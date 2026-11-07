@@ -101,6 +101,15 @@ def recover_superseded_and_exit_tasks(state,as_of):
               and not task.get('adjustment_bridge_recovery')):
             task['adjustment_bridge_recovery']=dict(version='entry-share-total-return-1',at=as_of,previous_error=task['error'],previous_attempts=task['attempts'])
             task.update(state='RETRY',attempts=0,not_before=as_of,error=None);changes+=1
+        elif (task['op']=='ENTRY' and task['state']=='BLOCKED'
+              and cohort.get('state')=='WAIT_ENTRY'
+              and task.get('error')=='COST_PREVIEW_STALE'
+              and not task.get('cost_preview_recovery')):
+            task['cost_preview_recovery']=dict(at=as_of,previous_error=task['error'],
+                previous_attempts=task['attempts'],raw_response_ref=task.get('raw_response_ref'))
+            task.update(state='RETRY',attempts=0,not_before=as_of,error=None)
+            task.pop('lease_owner',None);task.pop('lease_until',None)
+            changes+=1
     return changes
 
 
@@ -205,6 +214,7 @@ class Worker:
             restored=state is not None
             if state is None:
                 state=initialize(store);head=store.save(state,None)
+            checkpoint_digest=digest(state)
             import os
             binding=digest([os.environ.get(k,'') for k in ('ETORO_API_KEY','ETORO_USER_KEY','ETORO_ACCESS_TOKEN')])
             if self.account_binding!=binding:
@@ -223,6 +233,7 @@ class Worker:
             recovered+=recover_superseded_and_exit_tasks(state,self.clock())
             if recovered:
                 head=store.save(state,head) # Recovery must be durable before reads.
+                checkpoint_digest=digest(state)
             plan(state,self.clock())
             # Up to four small completed blocks per wake; pending market/exit
             # conditions do not consume the three error retry attempts.
@@ -265,6 +276,7 @@ class Worker:
                     journal=getattr(getattr(self.sources,'client',None),'journal',[])
                     if journal:task['raw_response_ref']=remember(store,state,dict(task_id=task['id'],reads=journal))
                 head=store.save(state,head)
+                checkpoint_digest=digest(state)
             # Bounded checkpoint: archive task results immutably, keep only recent
             # completed task descriptors and all unfinished work.
             done=sorted([k for k,v in state['tasks'].items() if v['state']=='DONE'],key=lambda k:state['tasks'][k].get('completed_at',''))
@@ -275,7 +287,8 @@ class Worker:
                 if stamp(v['at'])>=cutoff or (v['op']=='FEEDBACK' and v['key']==month)}
             reachable=str({k:v for k,v in state.items() if k!='file_ids'})
             state['file_ids']={k:v for k,v in state['file_ids'].items() if k in reachable}
-            head=store.save(state,head)
+            if digest(state)!=checkpoint_digest:
+                head=store.save(state,head)
             with self.lock:self.applied_states=copy.deepcopy(state['learning_states'])
             counts={}
             for row in state['cohorts'].values():counts[row['state']]=counts.get(row['state'],0)+1
