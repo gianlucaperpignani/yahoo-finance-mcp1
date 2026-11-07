@@ -9,6 +9,7 @@ from archive_client import ArchiveError
 from collector_store import Conflict
 from opportunity_cohorts import update
 from learning_collector import Worker,add_task,eligible,MAX_ATTEMPTS,initialize,recover_archive_tasks,recover_rate_tasks,validation_code
+from learning_collector import recover_superseded_and_exit_tasks
 from learning_sources import Pending,account_fingerprint
 from etoro_learning_client import Client,ReadFailure
 import test_completion_flow as fixtures
@@ -76,6 +77,22 @@ class CheckpointTests(unittest.TestCase):
     def test_write_failure_before_read_never_advances_work(self):
         self.store.fail_save=True;w=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0]);w._run()
         self.assertEqual(w.status()['state'],'ERROR');self.assertEqual(self.sources.reads,0);self.assertIsNone(self.store.value)
+    def test_idle_wake_does_not_write_checkpoint(self):
+        worker=self.wake()
+        self.wake(worker)
+        self.wake(worker)
+        with patch.object(self.store,'save',wraps=self.store.save) as save:
+            self.wake(worker)
+        save.assert_not_called()
+    def test_stale_cost_recovery_is_bounded_and_preserves_evidence(self):
+        state=dict(tasks={},cohorts={'cohort':dict(state='WAIT_ENTRY')})
+        task=state['tasks'][add_task(state,'ENTRY','cohort',dict(cohort='cohort'))]
+        task.update(state='BLOCKED',attempts=MAX_ATTEMPTS,error='COST_PREVIEW_STALE',raw_response_ref='evidence')
+        self.assertEqual(recover_superseded_and_exit_tasks(state,self.clock[0]),1)
+        self.assertEqual(task['state'],'RETRY')
+        self.assertEqual(task['cost_preview_recovery']['raw_response_ref'],'evidence')
+        task.update(state='BLOCKED',error='COST_PREVIEW_STALE')
+        self.assertEqual(recover_superseded_and_exit_tasks(state,self.clock[0]),0)
     def test_lost_publication_ack_retries_same_immutable_event(self):
         self.wake();self.store.lose_publish_ack=True;w=self.wake()
         published_before=set(self.store.published)
