@@ -34,6 +34,26 @@ class SourceTests(unittest.TestCase):
         with patch('learning_sources.now',return_value='2026-10-25T15:00:00+00:00'):
             with self.assertRaisesRegex(Pending,'WAIT_OPEN_SESSION'):sources.entry(dict(candidates=[dict(key='AAA')]),dict(AAA=self.context(1),SPY=self.context(2)),'SPY','test')
         self.assertEqual(broker.calls,[])
+    def test_stale_cost_aborts_before_quotes_and_retry_requests_new_observation(self):
+        broker=Broker();sources=Sources(None,None,None,broker)
+        fee=dict(url='primary',sha256='a'*64,retrieved_at=AT,stocks_open_close_flat_schedule=True)
+        read=broker.read
+        stale=True
+        def preview(path,**kw):
+            response=read(path,**kw)
+            if stale and path.endswith('/costs'):
+                response['body']['lastUpdated']='2026-10-26T14:55:59Z'
+            return response
+        broker.read=preview
+        args=(dict(candidates=[dict(key='AAA')]),dict(AAA=self.context(1),SPY=self.context(2)),'SPY','same-task')
+        with patch('learning_sources.now',return_value=AT),patch('learning_sources.fetch_fees',return_value=fee):
+            with self.assertRaisesRegex(ValueError,'COST_PREVIEW_STALE'):
+                sources.entry(*args)
+            self.assertFalse(any(p.endswith('/rates') for p,_ in broker.calls))
+            stale=False
+            self.assertEqual(sources.entry(*args)['quotes']['AAA']['ask'],100.2)
+        ids=[k['request_id'] for p,k in broker.calls if p.endswith('/costs')]
+        self.assertEqual(len(set(ids)),2)
     def test_unknown_currency_is_not_inferred_from_ticker(self):
         broker=Broker();history=lambda ticker:dict(name='Synthetic Corp',calendar='XPAR',major_currency='EUR',price_unit='EUR')
         sources=Sources(history,lambda ticker:dict(atr14=2),lambda **kw:dict(status='PASS'),broker)
