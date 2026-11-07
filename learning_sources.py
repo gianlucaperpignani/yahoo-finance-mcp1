@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from adaptive_method import digest,stamp
 from etoro_learning_client import Client,ReadFailure,unpack
 from learning_acquisition import prepare_entry
+from learning_costs import normalize_open
 from learning_sessions import session_plan,close_from_history
 
 FEE_URL='https://www.etoro.com/trading/fees/'
@@ -156,11 +157,20 @@ class Sources:
             if type(minimum) not in (int,float) or minimum<=0:raise Pending('RESEARCH_NOTIONAL_MINIMUM_UNAVAILABLE:'+key,3600)
             notional=max(notional,minimum)
         started=stamp(now())
+        # A lease retry must request a new broker observation. The archived
+        # collector task ID remains stable, independently of HTTP correlation IDs.
+        cost_attempt=uuid.uuid4().hex
         for key in tickers:
             if (stamp(now())-started).total_seconds()>270:raise Pending('COHORT_COST_WINDOW_EXCEEDED',300)
             meta=contexts[key]['metadata'];body=dict(action='open',transaction='buy',instrumentId=meta['instrumentId'],settlementType='real',orderType='mkt',leverage=1,amount=notional,orderCurrency='usd')
-            response=self.client.read('/api/v2/trading/info/costs',body=body,request_id=request_id(task+'/cost/'+key))
-            costs[key]=dict(response=response,request=dict(path='/api/v2/trading/info/costs',body=body),exit_fee_policy=exit_policy(meta,response,fee_source,now()))
+            response=self.client.read('/api/v2/trading/info/costs',body=body,request_id=request_id(task+'/cost/'+cost_attempt+'/'+key))
+            observed=now()
+            request=dict(path='/api/v2/trading/info/costs',body=body)
+            policy=exit_policy(meta,response,fee_source,observed)
+            # Fail before further broker reads. prepare_entry revalidates the
+            # same raw preview against the final observation time.
+            normalize_open(response,request,observed,policy)
+            costs[key]=dict(response=response,request=request,exit_fee_policy=policy)
         fx_values,raw_fx=self.live_fx([contexts[k]['currency'] for k in all_keys],task)
         rates=self.client.read('/api/v2/market-data/rates',query={'instrumentIds':','.join(map(str,ids))},request_id=request_id(task+'/quotes'))
         byid={q['instrumentId']:q for q in unpack(rates).get('results',[])};overview=dict(statusCode=200,xRequestId=rates['xRequestId'],instruments=[])
