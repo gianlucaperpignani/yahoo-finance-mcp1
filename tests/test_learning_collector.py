@@ -81,6 +81,7 @@ class CheckpointTests(unittest.TestCase):
         worker=self.wake()
         self.wake(worker)
         self.wake(worker)
+        self.clock[0]='2026-11-02T09:06:00+00:00'
         with patch.object(self.store,'save',wraps=self.store.save) as save:
             self.wake(worker)
         save.assert_not_called()
