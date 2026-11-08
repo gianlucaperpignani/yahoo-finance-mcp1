@@ -58,6 +58,18 @@ class PriceTests(unittest.TestCase):
         b=Backend();r=PriceCache(clock=lambda:NOW);key='s:SYNTHETIC:2y:1d:None:None';c={key:entry()}
         r.flush(b,c,threading.Lock(),'compat');c[key]['ts']+=1
         self.assertFalse(r.is_verified(key,c[key]))
+    def test_recent_bucket_updates_coalesce_across_restart(self):
+        b=Backend();lock=threading.Lock();key='s:SYNTHETIC:2y:1d:None:None'
+        clock=[NOW];c={key:entry()};r=PriceCache(clock=lambda:clock[0])
+        r.flush(b,c,lock,'compat');original=b.head()
+        clock[0]+=60;c[key]=entry(ts=clock[0])
+        r=PriceCache(clock=lambda:clock[0]);r.restore(b,c,lock,'compat',1100)
+        r.flush(b,c,lock,'compat')
+        self.assertEqual(b.head(),original)
+        self.assertFalse(r.is_verified(key,c[key]))
+        clock[0]=NOW+6*3600;r.flush(b,c,lock,'compat')
+        self.assertNotEqual(b.head(),original)
+        self.assertTrue(r.is_verified(key,c[key]))
     def test_corrupt_hash_or_cross_kind_is_rejected(self):
         text=canonical(dict(kind='PRICE_CACHE_BATCH',schema=1,entries=[]));sha=digest(text)
         result=dict(payload_json=text,payload_sha256=sha,object_id=digest('PRICE_CACHE_BATCH\n'+sha))

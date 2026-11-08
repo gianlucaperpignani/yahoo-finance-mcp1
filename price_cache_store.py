@@ -12,9 +12,10 @@ import time
 import zlib
 from archive_client import ArchiveClient, ArchiveError, canonical, digest, MAX_PAYLOAD_BYTES, configuration_status
 
-VERSION='1.2.0'
+VERSION='1.3.0'
 BUCKETS=32
 FLUSH_BUCKETS=4
+BUCKET_WRITE_INTERVAL=6*3600
 MAX_AGE=4*86400
 MAX_BLOB=512000
 MAX_RAM_BYTES=64*1024*1024
@@ -80,7 +81,7 @@ class PriceCache:
     def __init__(self,factory=None,clock=time.time):
         self.factory=factory or (lambda:Store(ArchiveClient.from_env()))
         self.clock=clock;self.lock=threading.Lock();self.busy=False;self.ready=False
-        self.refs={};self.head_id=None;self.verified={};self.last_attempt=0
+        self.refs={};self.head_id=None;self.verified={};self.last_attempt=0;self.saved_at={}
         self.info=dict(version=VERSION,state='NOT_STARTED',restored_entries=0,verified_entries=0)
         self.restored=set();self.cursor=0
         self.restore_plan=None;self.restore_cursor=0
@@ -122,13 +123,15 @@ class PriceCache:
                 timer.daemon=True;timer.start()
     def restore(self,store,cache,lock,compat,max_items,budget=BUCKETS):
         if self.restore_plan is None:
-            head=store.head();refs={}
+            head=store.head();refs={};saved_at={}
             if head:
                 manifest=store.get(head['object_id'],'PRICE_CACHE_MANIFEST')
-                if manifest.get('compat')==compat:refs=manifest.get('buckets',{})
+                if manifest.get('compat')==compat:
+                    refs=manifest.get('buckets',{})
+                    saved_at=manifest.get('saved_at',{})
             if not isinstance(refs,dict) or len(refs)>BUCKETS:raise ArchiveError('PRICE_CACHE_MANIFEST_INVALID')
-            self.restore_plan=(head,refs);self.restore_cursor=0
-        head,refs=self.restore_plan
+            self.restore_plan=(head,refs,saved_at);self.restore_cursor=0
+        head,refs,saved_at=self.restore_plan
         if head:
             if refs:
                 if not isinstance(refs,dict) or len(refs)>BUCKETS:raise ArchiveError('PRICE_CACHE_MANIFEST_INVALID')
@@ -152,23 +155,29 @@ class PriceCache:
                     self.restore_cursor+=1
                 if self.restore_cursor<len(refs):return
         self.head_id=head['object_id'] if head else None;self.refs=refs;self.ready=True
+        self.saved_at={k:v for k,v in saved_at.items() if k in refs and type(v) in (int,float) and 0<=v<=self.clock()} if isinstance(saved_at,dict) else {}
         self.restore_plan=None
     def flush(self,store,cache,lock,compat):
         with lock:
             snapshot={k:dict(v) for k,v in cache.items() if k.startswith('s:') and len(k.split(':'))==6 and k.split(':')[3]=='1d' and 'blob' in v and 0<=self.clock()-v['ts']<MAX_AGE}
         dirty=sorted({bucket(k) for k,v in snapshot.items() if not self.is_verified(k,v)})
-        if not dirty:return
+        now=self.clock()
+        due=[name for name in dirty if name not in self.saved_at or now-self.saved_at[name]>=BUCKET_WRITE_INTERVAL]
+        with self.lock:self.info.update(deferred_buckets=len(dirty)-len(due),bucket_write_interval_s=BUCKET_WRITE_INTERVAL)
+        if not due:return
         refs=dict(self.refs);saved={}
-        ordered=sorted(dirty,key=lambda n:(int(n)-self.cursor)%BUCKETS)
+        ordered=sorted(due,key=lambda n:(int(n)-self.cursor)%BUCKETS)
+        saved_at=dict(self.saved_at)
         for name in ordered[:FLUSH_BUCKETS]:
             rows=[encode_entry(k,v) for k,v in snapshot.items() if bucket(k)==name]
             part=dict(kind='PRICE_CACHE_BATCH',schema=1,compat=compat,bucket=name,entries=rows)
             refs[name]=store.put(part)
+            saved_at[name]=now
             for k,v in snapshot.items():
                 if bucket(k)==name:saved[k]=self._signature(v)
-        manifest=dict(kind='PRICE_CACHE_MANIFEST',schema=1,compat=compat,buckets=refs)
+        manifest=dict(kind='PRICE_CACHE_MANIFEST',schema=1,compat=compat,buckets=refs,saved_at=saved_at)
         head_id=store.put(manifest,base=self.head_id)
-        self.refs=refs;self.head_id=head_id;self.verified.update(saved)
+        self.refs=refs;self.head_id=head_id;self.saved_at=saved_at;self.verified.update(saved)
         self.verified={k:v for k,v in self.verified.items() if k in snapshot}
         self.cursor=(int(ordered[min(FLUSH_BUCKETS-1,len(ordered)-1)])+1)%BUCKETS
 
@@ -179,6 +188,7 @@ runtime=PriceCache()
 def _after_fork():
     runtime.lock=threading.Lock();runtime.busy=False;runtime.ready=False
     runtime.last_attempt=0;runtime.refs={};runtime.head_id=None;runtime.verified={}
+    runtime.saved_at={}
     runtime.restored=set();runtime.info=dict(version=VERSION,state='NOT_STARTED',restored_entries=0,verified_entries=0)
     runtime.restore_plan=None;runtime.restore_cursor=0
 

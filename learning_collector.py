@@ -81,8 +81,8 @@ def recover_superseded_and_exit_tasks(state,as_of):
     """Keep obsolete failures as audit, reopen only the newly supported EXIT once."""
     changes=0
     tasks=state['tasks']
-    finished_discovery=[t for t in tasks.values() if t['op']=='DISCOVER' and t['state']=='DONE']
-    finished_discovery += [dict(v,id=k,state='DONE') for k,v in state.get('completed_tasks',{}).items() if v['op']=='DISCOVER']
+    finished_discovery=[t for t in tasks.values() if t['op']=='DISCOVER' and t['state']=='DONE' and not t['key'].startswith('refs:')]
+    finished_discovery += [dict(v,id=k,state='DONE') for k,v in state.get('completed_tasks',{}).items() if v['op']=='DISCOVER' and not v['key'].startswith('refs:')]
     newest=max(finished_discovery,key=lambda t:t.get('completed_at',t.get('at','')),default=None)
     for task in tasks.values():
         if task['state'] in {'DONE','SUPERSEDED'}:continue
@@ -91,7 +91,7 @@ def recover_superseded_and_exit_tasks(state,as_of):
         reason=None;replacement=None
         if task['op']=='CONTEXT' and cohort.get('state') in {'WAIT_EXIT','CLOSED'}:
             reason='CONTEXT_SUPERSEDED_BY_VERIFIED_ENTRY';replacement=cohort.get('ref')
-        elif task['op']=='DISCOVER' and newest and newest['id']!=task['id'] and newest['key']>task['key']:
+        elif task['op']=='DISCOVER' and not task['key'].startswith('refs:') and newest and newest['id']!=task['id'] and newest['key']>task['key']:
             reason='DISCOVERY_SUPERSEDED_BY_LATER_VERIFIED_SCAN';replacement=newest['id']
         if reason:
             task['superseded']=dict(at=as_of,reason=reason,replaced_by=replacement,previous_state=task['state'],previous_error=task.get('error'))
@@ -155,11 +155,6 @@ def initialize(store):
 
 def plan(state,as_of):
     if not state['account_verified']:return
-    # Full discovery archiving happens independently; this imports references,
-    # never another scanner request and never old discoveries as current signals.
-    moment=stamp(as_of)
-    slot=moment.strftime('%Y-%m-%dT%H:')+str(moment.minute//5*5).zfill(2)
-    add_task(state,'DISCOVER',slot,{})
     from datetime import datetime
     local=stamp(as_of).astimezone(__import__('zoneinfo').ZoneInfo('Europe/Rome'))
     history_key=local.strftime('%Y-%m-%d')+'|'+('AM' if local.hour<16 else 'PM')
@@ -235,6 +230,20 @@ class Worker:
                 head=store.save(state,head) # Recovery must be durable before reads.
                 checkpoint_digest=digest(state)
             plan(state,self.clock())
+            # Poll only the small reference list. Empty polls need no task,
+            # raw object or checkpoint write. Persist the lease before import.
+            if state['account_verified']:
+                try:
+                    refs=sorted(set(store.scan_refs())-set(state['seen_scans']))
+                except ArchiveError as exc:
+                    refs=[]
+                    discovery_error=str(exc)
+                else:
+                    discovery_error=None
+                if refs:
+                    add_task(state,'DISCOVER','refs:'+digest(refs),dict(refs=refs))
+            else:
+                discovery_error=None
             # Up to four small completed blocks per wake; pending market/exit
             # conditions do not consume the three error retry attempts.
             for _ in range(4):
@@ -296,7 +305,7 @@ class Worker:
             ledger_count=len(store.get(state['ledger_ref']))
             blocked=sum(t['state']=='BLOCKED' for t in pending)
             with self.lock:self.info.update(state='DEGRADED' if blocked else 'READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=blocked,
-                issues=sorted(set(t.get('error') for t in pending if t.get('error')))[:8],last_checked_at=self.clock(),account_verified=state['account_verified'],
+                issues=sorted({t['error'] for t in pending if t.get('error')} | ({discovery_error} if discovery_error else set()))[:8],last_checked_at=self.clock(),account_verified=state['account_verified'],
                 restored_checkpoint=restored,checkpoint_object_id=head,ledger_entries=ledger_count,
                 recovered_archive_tasks=sum(bool(t.get('archive_recovery')) for t in state['tasks'].values()),
                 recovered_rate_timestamp_tasks=sum(bool(t.get('rate_timestamp_recovery')) for t in state['tasks'].values()),
@@ -333,7 +342,7 @@ class Worker:
             response=self.sources.verify_account(state['account_fingerprint'],task['id']);state['account_verified']=True
             return dict(source=response)
         if op=='DISCOVER':
-            for ref in store.scan_refs():
+            for ref in (args['refs'] if 'refs' in args else store.scan_refs()):
                 if ref in state['seen_scans']:continue
                 archive=store.scanner_archive(ref)
                 if (stamp(self.clock())-stamp(archive['frozen_at'])).total_seconds()>900:
