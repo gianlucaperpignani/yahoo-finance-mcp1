@@ -18,7 +18,7 @@ from urllib.request import Request, HTTPRedirectHandler, build_opener
 VERSION = '1.0.0'
 _GATEWAY_LOCK=threading.Lock()
 _METRICS_LOCK=threading.Lock()
-_METRICS=dict(calls=0,request_bytes=0,response_bytes=0,failures=0,by_action={},attempts_by_action={},recovered_commit_acks=0,last_failure=None)
+_METRICS=dict(calls=0,request_bytes=0,response_bytes=0,request_bytes_by_action={},failures=0,by_action={},attempts_by_action={},recovered_commit_acks=0,last_failure=None)
 
 def io_metrics():
     import copy
@@ -114,7 +114,10 @@ class ArchiveClient:
         msg=canonical(dict(protocol=1,action=action,timestamp=int(self.clock()),nonce=nonce,**fields))
         signature=hmac.new(self.secret,msg.encode(),hashlib.sha256).hexdigest()
         body=canonical(dict(message=msg,signature=signature)).encode()
-        with _METRICS_LOCK:_METRICS['request_bytes']+=len(body)
+        with _METRICS_LOCK:
+            _METRICS['request_bytes']+=len(body)
+            by_action=_METRICS['request_bytes_by_action']
+            by_action[action]=by_action.get(action,0)+len(body)
         req=Request(self.url,data=body,
                     headers={'Content-Type':'application/json','User-Agent':'etoro-archive/1.0.0'})
         try:
