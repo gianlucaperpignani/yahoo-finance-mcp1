@@ -6,6 +6,7 @@ shadow-comparison unit. Never an order, allocated amount or portfolio risk rule.
 import hashlib
 import html
 import json
+import math
 import re
 import uuid
 import os
@@ -140,11 +141,18 @@ class Sources:
         if set(all_keys)-set(contexts):raise Pending('LEARNING_CONTEXTS_INCOMPLETE')
         # Closed exchange is normal waiting, checked before broker quote/cost calls.
         moment=now()
-        for key in all_keys:
-            try:session_plan(contexts[key]['calendar_id'],moment)
+        calendars={contexts[key]['calendar_id'] for key in all_keys}
+        next_opens=[]
+        for calendar in sorted(calendars):
+            try:session_plan(calendar,moment)
             except ValueError as exc:
-                if str(exc)=='ENTRY_SESSION_NOT_OPEN':raise Pending('WAIT_OPEN_SESSION',300) from None
-                raise
+                if str(exc)!='ENTRY_SESSION_NOT_OPEN':raise
+                import exchange_calendars as xc
+                import pandas as pd
+                next_opens.append(xc.get_calendar(calendar).next_open(pd.Timestamp(stamp(moment))).to_pydatetime())
+        if next_opens:
+            seconds=math.ceil((max(next_opens)-stamp(moment)).total_seconds())
+            raise Pending('WAIT_OPEN_SESSION',max(1,seconds))
         ids=[contexts[k]['metadata']['instrumentId'] for k in all_keys]
         eligibility=self.client.read('/api/v2/trading/info/eligibility',body=dict(instrumentIds=ids,currency='USD'),request_id=request_id(task+'/eligibility'))
         allowed={r['instrumentId']:r for r in unpack(eligibility).get('eligibilities',[])}
