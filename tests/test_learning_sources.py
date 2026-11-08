@@ -32,7 +32,9 @@ class SourceTests(unittest.TestCase):
     def test_closed_session_makes_no_quote_or_cost_requests(self):
         broker=Broker();sources=Sources(None,None,None,broker)
         with patch('learning_sources.now',return_value='2026-10-25T15:00:00+00:00'):
-            with self.assertRaisesRegex(Pending,'WAIT_OPEN_SESSION'):sources.entry(dict(candidates=[dict(key='AAA')]),dict(AAA=self.context(1),SPY=self.context(2)),'SPY','test')
+            with self.assertRaisesRegex(Pending,'WAIT_OPEN_SESSION') as wait:
+                sources.entry(dict(candidates=[dict(key='AAA')]),dict(AAA=self.context(1),SPY=self.context(2)),'SPY','test')
+        self.assertEqual(wait.exception.seconds,81000)
         self.assertEqual(broker.calls,[])
     def test_stale_cost_aborts_before_quotes_and_retry_requests_new_observation(self):
         broker=Broker();sources=Sources(None,None,None,broker)
