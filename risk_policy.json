@@ -6,7 +6,7 @@
   "mandate_fingerprints": {
     "CONS-2026-10-17-r6": "78f5eb38aed3bd404cfc06c963926803dc04a0ec6bf8e76998aca806a20010ae",
     "CONS-2026-10-17-r7": "9370d1486bc9aad9f8c43b2cf0fbcb55edd948f85218d6a3696d0ab2a9cbc3bd",
-    "CONS-2026-10-18-r8": "0f361085cb8bcb070abcf6280cdb6e1399a0a371d0d4dfcc2b260bd909669629"
+    "CONS-2026-10-18-r8": "5ea5eb88d9feca8da6f5ca942af3e1b21ece617915e0bc333b13ae64517caa0f"
   },
   "scope": "Existing implemented quantitative gates; not an exhaustive translation of the Mandato. r7 is compatibility only, not activation.",
   "percent_unit": "percentage_points",
