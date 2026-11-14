@@ -86,3 +86,22 @@ assert.equal(call(envelope('learning_commit',{...ls2,base_head:ls.object_id})).o
 assert.deepEqual(call(envelope('learning_scan_refs')).refs,[scanFields.object_id]);
 assert.equal(call(envelope('learning_tickets')).tickets.length,0);
 console.log('Private learning namespaces, immutable reads, head CAS/idempotence and scanner inventory: PASS');
+
+const compactState=learnFields({kind:'COLLECTOR_STATE',schema:1,state:{cursor:3},previous_head:ls2.object_id});
+const compactCommit=call(envelope('learning_commit',{...compactState,base_head:ls2.object_id,compact:true}));
+assert.equal(compactCommit.committed,true);
+assert.equal(compactCommit.payload_json,undefined);
+assert.equal(call(envelope('learning_head',{compact:true})).payload_json,compactState.payload_json);
+const unchanged=call(envelope('learning_head',{compact:true,known_head:compactState.object_id}));
+assert.equal(unchanged.unchanged,true);
+assert.equal(unchanged.payload_json,undefined);
+assert.equal(call(envelope('learning_head',{compact:true,known_head:ls2.object_id})).payload_json,compactState.payload_json);
+const eventPayload=JSON.stringify({kind:'AUTONOMOUS_COHORT_OBSERVATION',ledger_ref:lr.object_id,cohorts:{a:{state:'CLOSED'}}});
+const event={kind:'FEEDBACK',cycle_id:run,payload_json:eventPayload,payload_sha256:sha(eventPayload)};
+event.object_id=sha('FEEDBACK\n'+run+'\n'+event.payload_sha256);
+const rowCount=rows.length;
+const publication=call(envelope('put',event));
+assert.equal(call(envelope('put',event)).registry_range,publication.registry_range);
+assert.equal(rows.length,rowCount+1);
+assert.equal(call(envelope('get',{object_id:event.object_id})).payload_json,eventPayload);
+console.log('Compact checkpoint and deduplicated FEEDBACK Registry readback: PASS');

@@ -1,5 +1,6 @@
 """1.0.0: signed private checkpoint CAS, immutable raw objects and source import."""
 import base64
+import copy
 import hashlib
 import json
 import zlib
@@ -21,15 +22,32 @@ def decode_record(r,kind):
 
 
 class Store:
-    def __init__(self,client=None):self.client=client or ArchiveClient.from_env();self.file_ids={}
+    def __init__(self,client=None):
+        self.client=client or ArchiveClient.from_env()
+        self.file_ids={}
+        self.cached_state=None
+        self.cached_head=None
+        self.cached_sha=None
     def load(self):
-        r=self.client._call('learning_head')
-        if not r.get('object_id'):return None,None
-        value=decode_record(r,'COLLECTOR_STATE')
-        return value['state'],r['object_id']
+        r=self.client._call('learning_head',compact=True,known_head=self.cached_head)
+        if not r.get('object_id'):
+            self.cached_state=self.cached_head=self.cached_sha=None
+            return None,None
+        if r.get('unchanged') is True:
+            if self.cached_state is None or (r['object_id'],r.get('payload_sha256'))!=(self.cached_head,self.cached_sha):
+                raise ArchiveError('COLLECTOR_CHECKPOINT_READBACK_FAILED')
+        else:
+            value=decode_record(r,'COLLECTOR_STATE')
+            self.cached_state=value['state']
+            self.cached_head=r['object_id']
+            self.cached_sha=r['payload_sha256']
+        return copy.deepcopy(self.cached_state),self.cached_head
     def save(self,state,base):
         payload=dict(kind='COLLECTOR_STATE',schema=1,state=state,previous_head=base)
         result=self._put(payload,'learning_commit',base)
+        # Require an unconditional independent read after a commit. Once verified,
+        # unchanged polls can use the compact signed head until the next mutation.
+        self.cached_head=None
         read,head=self.load()
         if head!=result or read!=state:raise ArchiveError('COLLECTOR_CHECKPOINT_READBACK_FAILED')
         return head
@@ -37,11 +55,14 @@ class Store:
         text=canonical(value)
         if len(text.encode())>MAX_PAYLOAD_BYTES:raise ArchiveError('COLLECTOR_OBJECT_TOO_LARGE')
         sha=digest(text);key=digest(value['kind']+'\n'+sha)
-        try:r=self.client._call(action,payload_json=text,payload_sha256=sha,object_id=key,base_head=base)
+        try:r=self.client._call(action,payload_json=text,payload_sha256=sha,object_id=key,base_head=base,compact=action=='learning_commit')
         except ArchiveError as exc:
             if str(exc)=='ARCHIVE_REMOTE_REJECTED:LEARNING_HEAD_CONFLICT':raise Conflict(str(exc)) from None
             raise
-        decode_record(r,value['kind'])
+        if action=='learning_commit' and r.get('committed') is True:
+            if r.get('payload_sha256')!=sha:raise ArchiveError('COLLECTOR_ACK_INVALID')
+        else:
+            decode_record(r,value['kind'])
         if r.get('file_id'):self.file_ids[key]=r['file_id']
         if r.get('object_id')!=key:raise ArchiveError('COLLECTOR_ACK_INVALID')
         if action=='learning_put' and self.get(key)!=value['value']:raise ArchiveError('COLLECTOR_RAW_READBACK_FAILED')

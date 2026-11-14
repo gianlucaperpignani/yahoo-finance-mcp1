@@ -155,7 +155,11 @@ function learningHandle(req,props) {
     return {ok:true,config:config,chunks:parts};
   }
   if(req.action==='learning_head' && !head)return {ok:true,object_id:null};
-  if(req.action==='learning_head')req.object_id=head.object_id;
+  if(req.action==='learning_head') {
+    if(req.known_head===head.object_id && req.compact===true)
+      return {ok:true,object_id:head.object_id,payload_sha256:head.payload_sha256,unchanged:true};
+    req.object_id=head.object_id;
+  }
   archiveAssert(/^[0-9a-f]{64}$/.test(req.object_id||''),'OBJECT_ID_INVALID');
   let file=archiveFile(folder,req.object_id);
   if(req.action==='learning_put' || req.action==='learning_commit') {
@@ -170,6 +174,8 @@ function learningHandle(req,props) {
     else file=folder.createFile(Utilities.gzip(Utilities.newBlob(JSON.stringify(record),'application/json'),'etoro-archive-'+req.object_id+'.json.gz'));
     archiveAssert(archiveLoad(file).object_id===req.object_id,'DRIVE_READBACK_FAILED');
     if(kind==='COLLECTOR_STATE')props.setProperty('LEARNING_HEAD',JSON.stringify({object_id:req.object_id,payload_sha256:req.payload_sha256}));
+    if(req.action==='learning_commit' && req.compact===true)
+      return {ok:true,object_id:req.object_id,payload_sha256:req.payload_sha256,file_id:file.getId(),committed:true};
   }
   archiveAssert(!!file,'ARCHIVE_OBJECT_NOT_FOUND');const record=archiveLoad(file);
   const allowed=req.action==='learning_get'?['COLLECTOR_DATA']:['COLLECTOR_STATE','COLLECTOR_DATA'];
