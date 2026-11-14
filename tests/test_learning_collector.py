@@ -229,6 +229,29 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(self.store.value['tasks'][task_id]['state'],'RETRY')
         self.assertEqual(self.store.value['tasks'][task_id]['attempts'],1)
 
+    def test_raw_archive_failure_commits_retry_and_rolls_back_publication(self):
+        state=initialize(self.store);state.update(account_verified=True,tasks={})
+        task_id=add_task(state,'DISCOVER','raw-write-failure',{})
+        self.store.save(state,None)
+        worker=Worker(self.sources,lambda:self.store,clock=lambda:self.clock[0])
+        self.sources.client=type('Journal',(),{})()
+        save_raw=self.store.put
+        def put(value):
+            if isinstance(value,dict) and 'reads' in value:
+                raise ArchiveError('ARCHIVE_REQUEST_OR_RESPONSE_FAILED')
+            return save_raw(value)
+        def work(task,current,store):
+            self.sources.client.journal.append({'statusCode':200})
+            add_task(current,'PUBLISH','deferred',{'event_ref':'ref'})
+            return {'ok':True}
+        with patch('learning_collector.plan'),patch.object(worker,'execute',side_effect=work),patch.object(self.store,'put',side_effect=put):
+            worker._run()
+        self.assertEqual(set(self.store.value['tasks']),{task_id})
+        task=self.store.value['tasks'][task_id]
+        self.assertEqual(task['state'],'RETRY')
+        self.assertEqual(task['diagnostic']['stage'],'RAW_EVIDENCE_PERSISTENCE')
+        self.assertFalse(self.store.published)
+
 class AllowlistTests(unittest.TestCase):
     def test_execution_and_arbitrary_get_or_post_rejected_before_network(self):
         c=Client(opener=lambda *a,**kw:self.fail('network'))

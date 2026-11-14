@@ -18,7 +18,7 @@ from feedback_cycle import run as feedback
 from learning_sources import Pending,now,rate_timestamp
 from etoro_learning_client import ReadFailure
 
-VERSION='1.3.0';MAX_ATTEMPTS=3;LEASE_SECONDS=600
+VERSION='1.3.1';MAX_ATTEMPTS=3;LEASE_SECONDS=600
 ARCHIVE_RECOVERY_VERSION='archive-recovery-1'
 RECOVERABLE_ARCHIVE_ERRORS={'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}
 RATE_RECOVERY_VERSION='etoro-rate-utc-1'
@@ -192,7 +192,7 @@ def eligible(task,state,as_of):
 class Worker:
     def __init__(self,sources,store_factory=Store,clock=now):
         self.sources=sources;self.factory=store_factory;self.clock=clock;self.lock=threading.Lock();self.busy=False;self.last_tick=0
-        self.owner=uuid.uuid4().hex;self.applied_states=None;self.account_binding=None;self.account_failures=0;self.info=dict(version=VERSION,state='NOT_STARTED',orders_enabled=False,llm_calls=0)
+        self.store=None;self.owner=uuid.uuid4().hex;self.applied_states=None;self.account_binding=None;self.account_failures=0;self.info=dict(version=VERSION,state='NOT_STARTED',orders_enabled=False,llm_calls=0)
     def status(self):
         with self.lock:return copy.deepcopy(self.info)
     def selection_states(self):
@@ -205,7 +205,10 @@ class Worker:
         threading.Thread(target=self._run,daemon=True,name='learning-collector').start()
     def _run(self):
         try:
-            store=self.factory();state,head=store.load()
+            if self.store is None:self.store=self.factory()
+            store=self.store
+            if hasattr(store,'file_ids'):store.file_ids.clear()
+            state,head=store.load()
             restored=state is not None
             if state is None:
                 state=initialize(store);head=store.save(state,None)
@@ -283,7 +286,16 @@ class Worker:
                     task.update(state='BLOCKED' if task['attempts']>=MAX_ATTEMPTS else 'RETRY',error='COLLECTOR_TASK_FAILED',not_before=(stamp(self.clock())+timedelta(seconds=60*task['attempts'])).isoformat())
                 finally:
                     journal=getattr(getattr(self.sources,'client',None),'journal',[])
-                    if journal:task['raw_response_ref']=remember(store,state,dict(task_id=task['id'],reads=journal))
+                    if journal:
+                        try:
+                            task['raw_response_ref']=remember(store,state,dict(task_id=task['id'],reads=journal))
+                        except ArchiveError as exc:
+                            # Do not strand the lease or publish derived work without its audit evidence.
+                            task=rollback()
+                            task.update(state='BLOCKED' if task['attempts']>=MAX_ATTEMPTS else 'RETRY',
+                                        error=str(exc),not_before=(stamp(self.clock())+timedelta(
+                                            seconds=60*task['attempts'])).isoformat())
+                            task['diagnostic']=dict(operation=task['op'],stage='RAW_EVIDENCE_PERSISTENCE',code=str(exc))
                 head=store.save(state,head)
                 checkpoint_digest=digest(state)
             # Bounded checkpoint: archive task results immutably, keep only recent
@@ -302,14 +314,17 @@ class Worker:
             counts={}
             for row in state['cohorts'].values():counts[row['state']]=counts.get(row['state'],0)+1
             pending=[t for t in state['tasks'].values() if t['state'] not in {'DONE','SUPERSEDED'}]
-            ledger_count=len(store.get(state['ledger_ref']))
+            if state['ledger_ref']!=getattr(self,'ledger_count_ref',None):
+                self.ledger_count=len(store.get(state['ledger_ref']))
+                self.ledger_count_ref=state['ledger_ref']
+            ledger_count=self.ledger_count
             blocked=sum(t['state']=='BLOCKED' for t in pending)
-            with self.lock:self.info.update(state='DEGRADED' if blocked else 'READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=blocked,
+            with self.lock:self.info.update(state='DEGRADED' if blocked or discovery_error else 'READY',error=None,checkpoint_verified=True,cohorts=counts,pending_tasks=len(pending),blocked_tasks=blocked,
                 issues=sorted({t['error'] for t in pending if t.get('error')} | ({discovery_error} if discovery_error else set()))[:8],last_checked_at=self.clock(),account_verified=state['account_verified'],
                 restored_checkpoint=restored,checkpoint_object_id=head,ledger_entries=ledger_count,
                 recovered_archive_tasks=sum(bool(t.get('archive_recovery')) for t in state['tasks'].values()),
                 recovered_rate_timestamp_tasks=sum(bool(t.get('rate_timestamp_recovery')) for t in state['tasks'].values()),
-                source_registry_sha=state['source_registry_sha'],
+                source_registry_sha=state['source_registry_sha'],expired_scan_archives=len(state.get('expired_scans',[])),
                 superseded_tasks=sum(t['state']=='SUPERSEDED' for t in state['tasks'].values()),
                 adjustment_bridge_recovered_tasks=sum(bool(t.get('adjustment_bridge_recovery')) for t in state['tasks'].values()),
                 task_diagnostics=[dict(operation=t['op'],state=t['state'],attempts=t['attempts'],error=t.get('error'),diagnostic=t.get('diagnostic')) for t in pending[:12]])
@@ -346,6 +361,9 @@ class Worker:
                 if ref in state['seen_scans']:continue
                 archive=store.scanner_archive(ref)
                 if (stamp(self.clock())-stamp(archive['frozen_at'])).total_seconds()>900:
+                    expired=state.setdefault('expired_scans',[])
+                    expired.append(dict(ref=ref,frozen_at=archive['frozen_at'],reason='OPPORTUNITY_ARCHIVE_STALE'))
+                    state['expired_scans']=expired[-64:]
                     state['seen_scans'].append(ref);continue
                 # Include existing descriptors to avoid overlapping cohorts in same
                 # scope; no closed-universe survivor selection is introduced.
