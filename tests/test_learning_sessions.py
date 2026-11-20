@@ -96,3 +96,22 @@ class AdjustmentEvidenceTests(AdjustmentBridgeTests):
         e,p,h=self.fixture(1,1);e['currency']='GBP';h.update(currency='GBp',major_currency='GBP',price_scale_to_major_currency=.01)
         for r in h['history']:r.update(raw_close=r['raw_close']*100,close=r['close']*100)
         self.assertAlmostEqual(close_from_history(h,p,e,h['generated_at_utc'],1,'synthetic')['close'],102)
+
+class CalendarReferenceTests(unittest.TestCase):
+    def test_frozen_plan_survives_library_version_change_but_not_session_change(self):
+        import copy
+        from learning_sessions import exit_plan,validate_plan
+        from adaptive_method import digest
+        quotes={'AAA':dict(calendar_id='XNYS')}
+        benchmark=dict(calendar_id='XNYS')
+        entry='2026-11-13T15:13:31+00:00'
+        original=exit_plan(quotes,benchmark,entry)
+        plan=copy.deepcopy(original)
+        for row in [*plan['entries'].values(),plan['benchmark']]:
+            row['calendar_reference']='exchange_calendars prior-release'
+        plan['plan_hash']=digest({k:v for k,v in plan.items() if k!='plan_hash'})
+        self.assertEqual(validate_plan(plan,quotes,benchmark,entry),plan)
+        plan['entries']['AAA']['session_date']='2026-11-17'
+        with self.assertRaisesRegex(ValueError,'HASH'):validate_plan(plan,quotes,benchmark,entry)
+        plan['plan_hash']=digest({k:v for k,v in plan.items() if k!='plan_hash'})
+        with self.assertRaisesRegex(ValueError,'CALENDAR_MISMATCH'):validate_plan(plan,quotes,benchmark,entry)

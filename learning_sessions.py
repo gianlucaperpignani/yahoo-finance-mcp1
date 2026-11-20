@@ -35,7 +35,21 @@ def exit_plan(quotes,benchmark,entry_at):
 
 
 def validate_plan(plan,quotes,benchmark,entry_at):
-    if plan!=exit_plan(quotes,benchmark,entry_at):raise ValueError('EXIT_PLAN_CALENDAR_MISMATCH')
+    if not isinstance(plan,dict) or plan.get('plan_hash')!=digest({k:v for k,v in plan.items() if k!='plan_hash'}):
+        raise ValueError('EXIT_PLAN_HASH_INVALID')
+    current=exit_plan(quotes,benchmark,entry_at)
+    def financial_plan(value):
+        result=copy.deepcopy(value)
+        result.pop('plan_hash',None)
+        for row in [*result['entries'].values(),result['benchmark']]:
+            if not isinstance(row.get('calendar_reference'),str) or not row['calendar_reference'].strip():
+                raise ValueError('EXIT_PLAN_CALENDAR_SOURCE_REQUIRED')
+            row.pop('calendar_reference')
+            row['close_at']=stamp(row['close_at']).isoformat()
+        result['ready_at']=stamp(result['ready_at']).isoformat()
+        return result
+    if financial_plan(plan)!=financial_plan(current):
+        raise ValueError('EXIT_PLAN_CALENDAR_MISMATCH')
     return plan
 
 
