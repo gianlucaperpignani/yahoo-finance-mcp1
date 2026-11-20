@@ -252,6 +252,27 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(task['diagnostic']['stage'],'RAW_EVIDENCE_PERSISTENCE')
         self.assertFalse(self.store.published)
 
+    def test_interrupted_archive_exit_reopens_once_with_original_identity(self):
+        state=dict(tasks={})
+        ident=add_task(state,'EXIT','cohort',dict(cohort='cohort'))
+        task=state['tasks'][ident]
+        task.update(state='BLOCKED',attempts=3,error='MAX_ATTEMPTS_AFTER_INTERRUPTION',
+                    diagnostic=dict(exception_type='ArchiveError',code='ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED'))
+        self.assertEqual(recover_archive_tasks(state,self.clock[0]),1)
+        self.assertEqual(task['state'],'RETRY')
+        self.assertEqual(task['id'],ident)
+        self.assertEqual(task['archive_recovery']['previous_error'],'MAX_ATTEMPTS_AFTER_INTERRUPTION')
+        task.update(state='BLOCKED',error='MAX_ATTEMPTS_AFTER_INTERRUPTION',attempts=3)
+        self.assertEqual(recover_archive_tasks(state,self.clock[0]),0)
+
+    def test_interruption_without_proven_transient_archive_error_stays_blocked(self):
+        for code in ('ETORO_HTTP_403','COLLECTOR_HASH_INVALID',None):
+            state=dict(tasks={})
+            ident=add_task(state,'EXIT','cohort',dict(cohort='cohort'))
+            state['tasks'][ident].update(state='BLOCKED',attempts=3,error='MAX_ATTEMPTS_AFTER_INTERRUPTION',
+                                        diagnostic=dict(exception_type='ArchiveError',code=code))
+            self.assertEqual(recover_archive_tasks(state,self.clock[0]),0)
+
 class AllowlistTests(unittest.TestCase):
     def test_execution_and_arbitrary_get_or_post_rejected_before_network(self):
         c=Client(opener=lambda *a,**kw:self.fail('network'))
