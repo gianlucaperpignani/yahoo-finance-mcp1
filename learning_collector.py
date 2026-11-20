@@ -18,7 +18,7 @@ from feedback_cycle import run as feedback
 from learning_sources import Pending,now,rate_timestamp
 from etoro_learning_client import ReadFailure
 
-VERSION='1.3.1';MAX_ATTEMPTS=3;LEASE_SECONDS=600
+VERSION='1.3.2';MAX_ATTEMPTS=3;LEASE_SECONDS=600
 ARCHIVE_RECOVERY_VERSION='archive-recovery-1'
 RECOVERABLE_ARCHIVE_ERRORS={'ARCHIVE_REMOTE_REJECTED:GATEWAY_FAILED','ARCHIVE_REQUEST_OR_RESPONSE_FAILED'}
 RATE_RECOVERY_VERSION='etoro-rate-utc-1'
@@ -67,7 +67,11 @@ def recover_archive_tasks(state,as_of):
     """
     recovered=0
     for task in state['tasks'].values():
-        if (task['state']!='BLOCKED' or task.get('error') not in RECOVERABLE_ARCHIVE_ERRORS
+        interrupted_archive = (task.get('error')=='MAX_ATTEMPTS_AFTER_INTERRUPTION'
+            and task.get('diagnostic',{}).get('exception_type')=='ArchiveError'
+            and task.get('diagnostic',{}).get('code') in RECOVERABLE_ARCHIVE_ERRORS)
+        if (task['state']!='BLOCKED'
+                or (task.get('error') not in RECOVERABLE_ARCHIVE_ERRORS and not interrupted_archive)
                 or task.get('archive_recovery',{}).get('version')==ARCHIVE_RECOVERY_VERSION):continue
         task['archive_recovery']=dict(version=ARCHIVE_RECOVERY_VERSION,at=as_of,
             previous_error=task['error'],previous_attempts=task['attempts'])
@@ -180,6 +184,7 @@ def eligible(task,state,as_of):
     if task['state']=='RUNNING':
         if stamp(task['lease_until'])>stamp(as_of):return False
         if task['attempts']>=MAX_ATTEMPTS:
+            task['interrupted_error']=task.get('error')
             task.update(state='BLOCKED',error='MAX_ATTEMPTS_AFTER_INTERRUPTION');return False
     if task['op']!='ACCOUNT' and not state['account_verified']:return False
     ident=task['arguments'].get('cohort');row=state['cohorts'].get(ident,{})
